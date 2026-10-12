@@ -14,8 +14,8 @@ export const Header = ({
   isLoading,
 }: HeaderProps) => {
   return (
-    <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-30 px-6 py-4">
-      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-30 px-4 sm:px-6 lg:px-8 py-3.5 sm:py-4">
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
         {/* Brand */}
         <div className="flex items-center space-x-3">
           <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-orange-500 to-amber-400 flex items-center justify-center shadow-lg shadow-orange-500/20 text-slate-950 font-black text-xl">
@@ -37,7 +37,7 @@ export const Header = ({
         </div>
 
         {/* Stats & Actions */}
-        <div className="flex items-center flex-wrap gap-2.5">
+        <div className="flex items-center flex-wrap gap-2 sm:gap-2.5 justify-between sm:justify-end">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
             <span className="text-slate-400">Total:</span>
             <span className="font-bold text-slate-200">{totalDishes}</span>

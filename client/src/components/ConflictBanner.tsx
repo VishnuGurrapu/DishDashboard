@@ -47,18 +47,18 @@ export const ConflictBanner = ({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="button"
           onClick={onReloadLatest}
-          className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 transition shadow"
+          className="flex-1 min-w-[140px] px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 transition shadow text-center cursor-pointer"
         >
           Reload latest (discard draft)
         </button>
         <button
           type="button"
           onClick={onKeepDraft}
-          className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-amber-900/40 hover:bg-amber-900/60 text-amber-300 border border-amber-700/40 transition"
+          className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-amber-900/40 hover:bg-amber-900/60 text-amber-300 border border-amber-700/40 transition cursor-pointer"
         >
           Keep editing draft
         </button>

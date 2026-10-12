@@ -746,4 +746,30 @@ describe('DishDashboard App (Phase 4)', () => {
     containerA.remove()
     containerB.remove()
   })
+
+  it('renders a responsive grid and consistent aspect-ratio image containers', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ dishes: sampleDishes, total: 2 }),
+    } as Response)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dishes-grid')).toBeInTheDocument()
+    })
+
+    const grid = screen.getByTestId('dishes-grid')
+    expect(grid).toHaveClass('grid-cols-1')
+    expect(grid).toHaveClass('md:grid-cols-2')
+    expect(grid).toHaveClass('lg:grid-cols-3')
+
+    const card = screen.getByTestId('dish-card-1')
+    const imageContainer = card.querySelector('.aspect-video')
+    expect(imageContainer).toBeInTheDocument()
+
+    const img = card.querySelector('img')
+    expect(img).toHaveClass('object-cover')
+  })
 })

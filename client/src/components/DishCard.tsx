@@ -91,7 +91,7 @@ export const DishCard: React.FC<DishCardProps> = ({
       </div>
 
       {/* Card Content & Controls */}
-      <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+      <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between gap-4">
         {/* Conflict Notification Banner */}
         {conflict && (
           <ConflictBanner
@@ -108,64 +108,70 @@ export const DishCard: React.FC<DishCardProps> = ({
             role="alert"
             className="p-3 rounded-lg bg-red-950/50 border border-red-700/50 text-red-300 text-xs flex items-start gap-2"
           >
-            <span className="text-red-400 font-bold">Error:</span>
-            <span className="flex-1">{error}</span>
+            <span className="text-red-400 font-bold shrink-0">Error:</span>
+            <span className="flex-1 break-words">{error}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Dish Name Field */}
-          <div>
-            <label
-              htmlFor={`dish-name-${dish.dishId}`}
-              className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
-            >
-              Dish Name
-            </label>
-            <input
-              id={`dish-name-${dish.dishId}`}
-              type="text"
-              value={draft.dishName}
-              onChange={(e) => onNameChange(dish.dishId, e.target.value)}
-              disabled={isSaving}
-              placeholder="Enter dish name..."
-              className={`w-full px-3.5 py-2 text-sm rounded-xl bg-slate-950 text-slate-100 border transition outline-none focus:ring-2 focus:ring-orange-500/40 ${
-                hasNameChange
-                  ? 'border-amber-500/70 focus:border-amber-500'
-                  : 'border-slate-800 focus:border-slate-600'
-              } disabled:opacity-60 disabled:cursor-not-allowed`}
-            />
-            {hasNameChange && (
-              <span className="text-[11px] text-amber-400/90 mt-1 block">
-                Original: &ldquo;{dish.dishName}&rdquo;
-              </span>
-            )}
-          </div>
-
-          {/* Publication Status Toggle Control */}
-          <div className="pt-1 flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+        <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between gap-4">
+          <div className="space-y-4">
+            {/* Dish Name Field */}
             <div>
-              <span className="text-xs font-semibold text-slate-300 block">
-                Publication Status
-              </span>
-              <span className="text-[11px] text-slate-500">
-                {draft.isPublished
-                  ? 'Visible on public menu'
-                  : 'Hidden from public menu'}
-              </span>
+              <label
+                htmlFor={`dish-name-${dish.dishId}`}
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              >
+                Dish Name
+              </label>
+              <input
+                id={`dish-name-${dish.dishId}`}
+                type="text"
+                value={draft.dishName}
+                onChange={(e) => onNameChange(dish.dishId, e.target.value)}
+                disabled={isSaving}
+                placeholder="Enter dish name..."
+                className={`w-full px-3.5 py-2 text-sm rounded-xl bg-slate-950 text-slate-100 border transition outline-none focus:ring-2 focus:ring-orange-500/40 ${
+                  hasNameChange
+                    ? 'border-amber-500/70 focus:border-amber-500'
+                    : 'border-slate-800 focus:border-slate-600'
+                } disabled:opacity-60 disabled:cursor-not-allowed`}
+              />
+              {hasNameChange ? (
+                <span className="text-[11px] text-amber-400/90 mt-1 block truncate" title={`Original: "${dish.dishName}"`}>
+                  Original: &ldquo;{dish.dishName}&rdquo;
+                </span>
+              ) : (
+                <span className="text-[11px] text-transparent mt-1 block select-none" aria-hidden="true">
+                  &nbsp;
+                </span>
+              )}
             </div>
 
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={draft.isPublished}
-                onChange={(e) => onPublishChange(dish.dishId, e.target.checked)}
-                disabled={isSaving}
-                className="sr-only peer"
-                aria-label={`Toggle publication for ${dish.dishName}`}
-              />
-              <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
-            </label>
+            {/* Publication Status Toggle Control */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-xs font-semibold text-slate-300 block">
+                  Publication Status
+                </span>
+                <span className="text-[11px] text-slate-500 block truncate">
+                  {draft.isPublished
+                    ? 'Visible on public menu'
+                    : 'Hidden from public menu'}
+                </span>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={draft.isPublished}
+                  onChange={(e) => onPublishChange(dish.dishId, e.target.checked)}
+                  disabled={isSaving}
+                  className="sr-only peer"
+                  aria-label={`Toggle publication for ${dish.dishName}`}
+                />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
+              </label>
+            </div>
           </div>
 
           {/* Action Buttons */}
