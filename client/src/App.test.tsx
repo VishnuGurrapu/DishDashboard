@@ -353,6 +353,100 @@ describe('DishDashboard App (Phase 4)', () => {
     expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
   })
 
+  it('dismissing conflict with "Keep editing draft" preserves draft and stale expectedVersion so subsequent saves safely re-trigger 409 conflict', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      // 1. Initial GET
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+      // 2. First save returns 409
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: 'Conflict',
+          message: 'Stale version conflict. Expected version 1, but current version is 2.',
+          currentDish: {
+            ...sampleDishes[0],
+            dishName: 'Server Updated Rice',
+            version: 2,
+          },
+        }),
+      } as Response)
+      // 3. Second save after dismissing also returns 409
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: 'Conflict',
+          message: 'Stale version conflict. Expected version 1, but current version is 2.',
+          currentDish: {
+            ...sampleDishes[0],
+            dishName: 'Server Updated Rice',
+            version: 2,
+          },
+        }),
+      } as Response)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+    })
+
+    // User edits draft
+    const nameInput = screen.getByDisplayValue('Jeera Rice')
+    fireEvent.change(nameInput, { target: { value: 'My Local Edit' } })
+
+    // First save attempt
+    const card = screen.getByTestId('dish-card-1')
+    const saveBtn = card.querySelector('button[type="submit"]')!
+    fireEvent.click(saveBtn)
+
+    // Conflict banner appears
+    await waitFor(() => {
+      expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+    })
+
+    // Click "Keep editing draft"
+    const keepDraftBtn = screen.getByText('Keep editing draft')
+    fireEvent.click(keepDraftBtn)
+
+    // Banner is dismissed, but draft remains intact and unsaved
+    expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+    expect(nameInput).toHaveValue('My Local Edit')
+    expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+    // User edits draft further
+    fireEvent.change(nameInput, { target: { value: 'My Local Edit Further' } })
+    expect(nameInput).toHaveValue('My Local Edit Further')
+
+    // Click Save again
+    fireEvent.click(saveBtn)
+
+    // Verify the second save attempt still sent the stale expectedVersion: 1
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenLastCalledWith(
+        expect.stringContaining('/dishes/1'),
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({
+            expectedVersion: 1,
+            dishName: 'My Local Edit Further',
+          }),
+        })
+      )
+    })
+
+    // Conflict banner re-appears because version was still stale
+    await waitFor(() => {
+      expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+    })
+    expect(nameInput).toHaveValue('My Local Edit Further')
+  })
+
   it('handles API fetch error state with retry option', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
       .mockRejectedValueOnce(new Error('Network error connecting to backend'))

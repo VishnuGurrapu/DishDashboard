@@ -9,7 +9,12 @@ export const dishSeedItemSchema = z.object({
     .min(1, 'dishName cannot be empty'),
   imageUrl: z
     .string({ required_error: 'imageUrl is required' })
-    .url('imageUrl must be a valid URL'),
+    .trim()
+    .url('imageUrl must be a valid URL')
+    .refine(
+      (url) => /^https?:\/\//i.test(url),
+      'imageUrl must use http or https protocol'
+    ),
   isPublished: z.boolean({ required_error: 'isPublished is required' }),
   version: z.number().int().min(1).optional().default(1),
 })

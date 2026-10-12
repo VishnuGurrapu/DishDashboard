@@ -49,6 +49,21 @@ describe('Seed Validation Logic (Unit)', () => {
     expect(() => validateSeedData(invalidData)).toThrowError(/imageUrl must be a valid URL/i)
   })
 
+  it('rejects seed data with non-HTTP/HTTPS image URL protocols', () => {
+    const invalidData = [
+      {
+        dishId: '103',
+        dishName: 'FTP Protocol Dish',
+        imageUrl: 'ftp://example.com/ftp-image.jpg',
+        isPublished: true,
+      },
+    ]
+
+    expect(() => validateSeedData(invalidData)).toThrowError(
+      /imageUrl must use http or https protocol/i
+    )
+  })
+
   it('rejects seed data with duplicate dishId entries', () => {
     const duplicateData = [
       {
