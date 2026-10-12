@@ -2,6 +2,7 @@ import express, { Application, Request, Response } from 'express'
 import cors from 'cors'
 import { config } from './config/env'
 import { healthRouter } from './routes/health.route'
+import { dishRouter } from './routes/dish.route'
 
 export const createApp = (): Application => {
   const app = express()
@@ -17,6 +18,7 @@ export const createApp = (): Application => {
 
   // Routes
   app.use('/health', healthRouter)
+  app.use('/dishes', dishRouter)
 
   // 404 handler
   app.use((_req: Request, res: Response) => {

@@ -34,16 +34,19 @@ NOSHAssignment/
 │   │   ├── models/
 │   │   │   └── dish.model.ts   # Mongoose Dish model (dishId, dishName, imageUrl, isPublished, version)
 │   │   ├── routes/
-│   │   │   └── health.route.ts # GET /health route
+│   │   │   ├── dish.route.ts   # REST endpoints: GET /dishes, PATCH /dishes/:dishId
+│   │   │   └── health.route.ts # Health check: GET /health
 │   │   ├── schemas/
-│   │   │   └── dish.schema.ts  # Zod schemas for validating dish records
+│   │   │   └── dish.schema.ts  # Zod schemas for seed data and PATCH request validation
 │   │   ├── scripts/
 │   │   │   └── seed.ts         # Executable idempotent seed script CLI
 │   │   ├── services/
+│   │   │   ├── dish.service.ts # Dish business logic & atomic version-controlled updates
 │   │   │   └── seed.service.ts # Core seed logic & validation service
 │   │   ├── app.ts              # Express application & middleware
 │   │   └── server.ts           # Server HTTP listener (connects to MongoDB before listening)
 │   ├── tests/
+│   │   ├── dish.test.ts        # Comprehensive API tests for GET /dishes and PATCH /dishes/:dishId
 │   │   ├── health.test.ts      # Automated health endpoint test
 │   │   └── seed.test.ts        # Unit & safe integration tests for seed logic
 │   ├── .env.example            # Example environment variables
@@ -51,7 +54,7 @@ NOSHAssignment/
 │   └── tsconfig.json
 ├── dish-assignment.json        # Assignment seed data source (kept in root)
 ├── .gitignore                  # Root gitignore for workspace
-└── README.md                   # Setup and run guide
+└── README.md                   # Setup, run, and API guide
 ```
 
 ---
@@ -122,19 +125,128 @@ cd server
 npm run seed
 ```
 
-Example output:
-```text
-🌱 Starting dish database seed script...
-✅ MongoDB connected successfully: 127.0.0.1/nosh
-📖 Reading seed source: C:\vishnuprojects\NOSHAssignment\dish-assignment.json
-----------------------------------------------------
-✨ Seed operation completed successfully:
-   Total items evaluated: 5
-   Newly inserted dishes:  5
-   Inserted IDs:          [1, 2, 3, 4, 5]
-   Preserved/skipped:     0
-----------------------------------------------------
-🔌 Disconnected from MongoDB
+---
+
+### API Documentation (Phase 3)
+
+Base URL: `http://localhost:5000`
+
+#### 1. GET `/health`
+Health check endpoint verifying the server is responsive.
+
+**Response `200 OK`**:
+```json
+{
+  "status": "ok",
+  "message": "Nosh Dish Dashboard API is healthy",
+  "timestamp": "2026-10-12T14:28:16.164Z"
+}
+```
+
+---
+
+#### 2. GET `/dishes`
+Fetches all dishes directly from MongoDB sorted by `dishId`.
+
+**Response `200 OK`**:
+```json
+{
+  "dishes": [
+    {
+      "dishId": "1",
+      "dishName": "Jeera Rice",
+      "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+      "isPublished": true,
+      "version": 1
+    },
+    {
+      "dishId": "2",
+      "dishName": "Paneer Tikka",
+      "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/paneer-tikka.jpg",
+      "isPublished": true,
+      "version": 1
+    }
+  ],
+  "total": 2
+}
+```
+
+---
+
+#### 3. PATCH `/dishes/:dishId`
+Safely updates a dish using Optimistic Concurrency Control (OCC).
+
+**Request Body Parameters**:
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `expectedVersion` | integer (>= 1) | **Yes** | The version expected in the database before this edit is applied. |
+| `dishName` | string | Optional | Non-empty, trimmed dish name. Whitespace-only strings are rejected. |
+| `imageUrl` | string | Optional | Valid HTTP or HTTPS URL. |
+| `isPublished` | boolean | Optional | Boolean flag. Only modified if explicitly provided. |
+
+> **Note**: At least one of `dishName`, `imageUrl`, or `isPublished` must be supplied.
+
+**Example Request**:
+```http
+PATCH /dishes/1
+Content-Type: application/json
+
+{
+  "dishName": "Spiced Jeera Rice",
+  "isPublished": true,
+  "expectedVersion": 1
+}
+```
+
+**Response `200 OK` (Successful Update)**:
+```json
+{
+  "message": "Dish updated successfully",
+  "dish": {
+    "dishId": "1",
+    "dishName": "Spiced Jeera Rice",
+    "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+    "isPublished": true,
+    "version": 2
+  }
+}
+```
+
+**Response `409 Conflict` (Stale Version Conflict)**:
+Returned when `expectedVersion` does not match the database version (e.g. another user already updated the record). The database is left unchanged.
+```json
+{
+  "error": "Conflict",
+  "message": "Stale version conflict. Expected version 1, but current version is 2.",
+  "currentDish": {
+    "dishId": "1",
+    "dishName": "Spiced Jeera Rice",
+    "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+    "isPublished": true,
+    "version": 2
+  }
+}
+```
+
+**Response `400 Bad Request` (Validation Errors)**:
+Returned when input validation fails (e.g. empty name, invalid type, missing `expectedVersion`, or invalid image URL):
+```json
+{
+  "error": "Bad Request",
+  "message": "Request body validation failed.",
+  "details": [
+    "dishName: dishName cannot be empty or whitespace-only"
+  ]
+}
+```
+
+**Response `404 Not Found` (Unknown Dish)**:
+Returned when the requested `dishId` does not exist in the database:
+```json
+{
+  "error": "Not Found",
+  "message": "Dish with ID '999' was not found."
+}
 ```
 
 ---
@@ -165,27 +277,9 @@ The Vite development server will start at `http://localhost:5173`.
 
 ---
 
-### Verifying GET /health
-
-#### Using curl:
-```bash
-curl http://localhost:5000/health
-```
-
-Expected response:
-```json
-{
-  "status": "ok",
-  "message": "Nosh Dish Dashboard API is healthy",
-  "timestamp": "2026-10-12T14:28:16.164Z"
-}
-```
-
----
-
 ### Running Tests
 
-Automated tests are non-destructive. Integration tests execute against an isolated test database (`nosh_test_isolated_suite`), ensuring the developer's main database (`nosh`) is **never** reset or cleared:
+Automated tests execute safely against an isolated test database (`nosh_test_isolated_suite`). The developer's main database (`nosh`) is **never** reset or cleared:
 
 ```bash
 cd server
