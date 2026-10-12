@@ -492,4 +492,212 @@ describe('DishDashboard App (Phase 4)', () => {
     // No conflict banner because draft was not dirty
     expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
   })
+
+  it('renders empty state when dish catalog is empty', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ dishes: [], total: 0 }),
+    } as Response)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('empty-state')).toBeInTheDocument()
+    })
+    expect(screen.getByText('No Dishes Found')).toBeInTheDocument()
+    expect(
+      screen.getByText(/The database does not contain any dish records yet/i)
+    ).toBeInTheDocument()
+  })
+
+  it('simulates two independent concurrent dashboard sessions on the same dish with OCC conflict resolution', async () => {
+    // Shared backend state simulation
+    let serverDish: Dish = {
+      dishId: '1',
+      dishName: 'Original Rice',
+      imageUrl: 'https://example.com/jeera.jpg',
+      isPublished: true,
+      version: 1,
+    }
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const urlStr = String(url)
+      const method = init?.method || 'GET'
+
+      if (urlStr.endsWith('/dishes') && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: [{ ...serverDish }], total: 1 }),
+        } as Response
+      }
+
+      if (urlStr.includes('/dishes/1') && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body || '{}'))
+        const { expectedVersion, dishName, isPublished } = body
+
+        // Optimistic Concurrency Control check
+        if (expectedVersion !== serverDish.version) {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error: 'Conflict',
+              message: `Stale version conflict. Expected version ${expectedVersion}, but current version is ${serverDish.version}.`,
+              currentDish: { ...serverDish },
+            }),
+          } as Response
+        }
+
+        // Apply update and atomic version increment
+        serverDish = {
+          ...serverDish,
+          ...(dishName !== undefined ? { dishName } : {}),
+          ...(isPublished !== undefined ? { isPublished } : {}),
+          version: serverDish.version + 1,
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            message: 'Dish updated successfully',
+            dish: { ...serverDish },
+          }),
+        } as Response
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ error: 'Not Found' }),
+      } as Response
+    })
+
+    // 1. Session A loads dashboard
+    const { unmount: unmountSessionA } = render(<App />)
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Original Rice')).toBeInTheDocument()
+      expect(screen.getByText('v1')).toBeInTheDocument()
+    })
+
+    // Session A edits dishName
+    const nameInputA = screen.getByDisplayValue('Original Rice')
+    fireEvent.change(nameInputA, { target: { value: 'Rice Updated by Session A' } })
+
+    // Session A saves successfully
+    const saveBtnA = screen
+      .getByTestId('dish-card-1')
+      .querySelector('button[type="submit"]')!
+    fireEvent.click(saveBtnA)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
+      expect(screen.getByText('v2')).toBeInTheDocument()
+    })
+
+    // Unmount Session A so DOM is clean for Session B
+    unmountSessionA()
+
+    // 2. Now simulate Session B:
+    // Session B was opened while the dish was still version 1.
+    let sessionBInitialLoadDone = false
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const urlStr = String(url)
+      const method = init?.method || 'GET'
+
+      if (urlStr.endsWith('/dishes') && method === 'GET') {
+        if (!sessionBInitialLoadDone) {
+          sessionBInitialLoadDone = true
+          // Stale initial state loaded in Session B (v1)
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              dishes: [
+                {
+                  dishId: '1',
+                  dishName: 'Original Rice',
+                  imageUrl: 'https://example.com/jeera.jpg',
+                  isPublished: true,
+                  version: 1,
+                },
+              ],
+              total: 1,
+            }),
+          } as Response
+        }
+        // Subsequent fetches return current server state (v2)
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: [{ ...serverDish }], total: 1 }),
+        } as Response
+      }
+
+      if (urlStr.includes('/dishes/1') && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body || '{}'))
+        const { expectedVersion } = body
+        // Server rejects because expectedVersion (1) != serverDish.version (2)
+        if (expectedVersion !== serverDish.version) {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({
+              error: 'Conflict',
+              message: `Stale version conflict. Expected version ${expectedVersion}, but current version is ${serverDish.version}.`,
+              currentDish: { ...serverDish },
+            }),
+          } as Response
+        }
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ error: 'Not Found' }),
+      } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Original Rice')).toBeInTheDocument()
+      expect(screen.getByText('v1')).toBeInTheDocument()
+    })
+
+    // Session B makes conflicting edits to the dish
+    const nameInputB = screen.getByDisplayValue('Original Rice')
+    fireEvent.change(nameInputB, { target: { value: 'Conflicting Rice by Session B' } })
+    expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+    // Session B attempts to save its stale draft
+    const saveBtnB = screen
+      .getByTestId('dish-card-1')
+      .querySelector('button[type="submit"]')!
+    fireEvent.click(saveBtnB)
+
+    // 3. Verify Session B receives 409 Conflict, retains draft, and shows conflict banner
+    await waitFor(() => {
+      expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+    })
+    expect(nameInputB).toHaveValue('Conflicting Rice by Session B')
+    expect(
+      screen.getByText(
+        /Warning: Reloading replaces your current draft with the server version/i
+      )
+    ).toBeInTheDocument()
+
+    // 4. Session B explicitly resolves conflict by clicking Reload latest
+    const reloadBtn = screen.getByText('Reload latest (discard draft)')
+    fireEvent.click(reloadBtn)
+
+    // 5. Session B now displays Session A's saved version (v2)
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
+      expect(screen.getByText('v2')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+  })
 })

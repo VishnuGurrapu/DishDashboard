@@ -454,4 +454,63 @@ describe('Dishes API (/dishes)', () => {
       expect(response.body.error).toBe('Not Found')
     })
   })
+
+  describe('Persistence Across Backend Restarts & Database Immutability', () => {
+    it('persists dish updates and incremented version across simulated server restarts', async () => {
+      // 1. App instance A performs an update on dish 101 from v1 -> v2
+      const appInstanceA = createApp()
+      const updateRes = await request(appInstanceA)
+        .patch('/dishes/101')
+        .send({
+          dishName: 'Restart-Proof Paneer Butter Masala',
+          expectedVersion: 1,
+        })
+      expect(updateRes.status).toBe(200)
+      expect(updateRes.body.dish.version).toBe(2)
+
+      // 2. Simulate server restart: create brand-new Express app instance B
+      const appInstanceB = createApp()
+      const getRes = await request(appInstanceB).get('/dishes')
+      expect(getRes.status).toBe(200)
+
+      const reloadedDish = getRes.body.dishes.find(
+        (d: { dishId: string }) => d.dishId === '101'
+      )
+      expect(reloadedDish).toBeDefined()
+      expect(reloadedDish.dishName).toBe('Restart-Proof Paneer Butter Masala')
+      expect(reloadedDish.version).toBe(2)
+
+      // Verify direct MongoDB document
+      const doc = await Dish.findOne({ dishId: '101' })
+      expect(doc?.dishName).toBe('Restart-Proof Paneer Butter Masala')
+      expect(doc?.version).toBe(2)
+    })
+
+    it('guarantees invalid requests and 409 conflicts do not mutate the database record', async () => {
+      const initialDoc = await Dish.findOne({ dishId: '101' }).lean()
+      expect(initialDoc).not.toBeNull()
+
+      // 1. Invalid PATCH request (empty name)
+      const badReqRes = await request(app)
+        .patch('/dishes/101')
+        .send({ dishName: '   ', expectedVersion: 1 })
+      expect(badReqRes.status).toBe(400)
+
+      const docAfterBadReq = await Dish.findOne({ dishId: '101' }).lean()
+      expect(docAfterBadReq?.dishName).toBe(initialDoc?.dishName)
+      expect(docAfterBadReq?.version).toBe(initialDoc?.version)
+      expect(docAfterBadReq?.isPublished).toBe(initialDoc?.isPublished)
+
+      // 2. Conflict PATCH request (stale expectedVersion)
+      const conflictRes = await request(app)
+        .patch('/dishes/101')
+        .send({ dishName: 'Stale Attempt Name', expectedVersion: 999 })
+      expect(conflictRes.status).toBe(409)
+
+      const docAfterConflict = await Dish.findOne({ dishId: '101' }).lean()
+      expect(docAfterConflict?.dishName).toBe(initialDoc?.dishName)
+      expect(docAfterConflict?.version).toBe(initialDoc?.version)
+      expect(docAfterConflict?.isPublished).toBe(initialDoc?.isPublished)
+    })
+  })
 })

@@ -304,7 +304,7 @@ Available server scripts:
 - `npm run seed`: Executes the idempotent database seed script
 - `npm run build`: Compiles TypeScript to JavaScript in `dist/`
 - `npm start`: Runs the compiled production server (`dist/server.js`)
-- `npm test`: Runs automated test suite via Vitest (33 tests)
+- `npm test`: Runs automated test suite via Vitest (35 tests)
 
 #### 2. Start the Frontend Client
 In a separate terminal:
@@ -317,23 +317,67 @@ The Vite development server will start at `http://localhost:5173`.
 Available client scripts:
 - `npm run dev`: Starts Vite dev server
 - `npm run build`: Type-checks and compiles production bundle to `dist/`
-- `npm test`: Runs Vitest component & integration test suite (12 tests)
+- `npm test`: Runs Vitest component & integration test suite (14 tests)
 - `npm run preview`: Previews the production build
 
 ---
 
 ### Running Tests
 
-#### Backend Test Suite (33 tests):
+#### Backend Test Suite (35 tests):
 ```bash
 cd server
 npm test
 ```
 *Executes against an isolated test database (`nosh_test_isolated_suite` or `nosh_test`). The main database (`nosh`), `production_test`, development, and all unapproved databases are rejected by a strict allowlist guard.*
+Coverage includes:
+- **Seed Logic**: Validating seed structure, required fields, image URLs, duplicate prevention, default versioning, and strict re-seed idempotency without overwriting user edits.
+- **Health Check**: Automated status verification.
+- **Database Safety Guard**: Strict allowlist validation, malformed URI handling, and drop protection.
+- **REST Endpoints**: `GET /dishes` and `PATCH /dishes/:dishId` with atomic version-controlled updates.
+- **Concurrency & OCC**: Atomic incrementation, 409 conflict responses on stale versions, race condition handling with simultaneous requests.
+- **Validation Safeguards**: Empty/whitespace names, invalid types, missing fields, invalid/non-HTTP URLs on publishing.
+- **Persistence & Immutability**: Persistence across simulated backend restarts, and database immutability verification on validation errors and 409 conflicts.
 
-#### Frontend Test Suite (12 tests):
+#### Frontend Test Suite (14 tests):
 ```bash
 cd client
 npm test
 ```
-*Executes all UI, draft editing, discard, save, duplicate prevention, refresh conflict handling, error, and conflict tests via Vitest & React Testing Library.*
+*Executes via Vitest & React Testing Library.*
+Coverage includes:
+- **UI States**: Initial loading skeleton, error banner with retry, empty catalog state, dish cards, and image fallback placeholder.
+- **Local Draft Isolation**: Kept locally in React state without firing network requests while typing or toggling.
+- **Discard Workflow**: Cleanly restores server-saved values.
+- **Successful Updates**: Sends expectedVersion and changes, increments badge to next version, removes unsaved indicators.
+- **Submission Guard**: Disables buttons and prevents duplicate submissions while requests are in flight.
+- **Optimistic Concurrency Control**: On 409 Conflict, preserves user draft, shows warning banner, and provides explicit reload latest option.
+- **Refresh Protection**: Detects server version bumps during refresh with dirty drafts and prevents saving until resolved.
+- **Multi-Session Concurrency**: Simulates two concurrent browser sessions editing the same dish, verifying Session A's save triggers OCC conflict in Session B, which preserves Session B's draft and permits reload resolution.
+
+---
+
+### Known Limitations & Trade-offs
+
+1. **Local MongoDB Instance**:
+   - The application relies on a locally running MongoDB instance (or MongoDB connection string via `MONGODB_URI`). In a production deployment, this would be backed by a managed MongoDB Atlas cluster with connection pooling and replica sets.
+2. **On-Demand Concurrency vs. Real-Time Push**:
+   - Updates are synchronized on demand when users save or click Refresh. In high-frequency collaborative editing environments, WebSockets or Server-Sent Events (SSE) could be added to push remote dish changes to other connected clients in real time.
+3. **Optimistic Locking Granularity**:
+   - Concurrency control operates at the individual dish document level via atomic `findOneAndUpdate` with matching `version`. This provides low overhead and zero lock contention across different dishes.
+4. **Node.js Engine Compatibility in Development**:
+   - Dependencies (`jsdom@30.1.2`, `vitest@5.0.4`) declare engine support for `^22.22.2 || ^24.15.0 || >=26.0.0`. Local verification was performed on Node.js `v24.13.0` (which passes all tests and builds). In strict production environments, a runtime matching the declared engine range should be used.
+
+---
+
+### Time Spent & AI Assistance Disclosure
+
+- **Total Time Spent**: Approximately 4.5 hours across 5 phases:
+  - *Phase 1 (Foundation & Setup)*: ~35 mins
+  - *Phase 2 (Database, Dish Model & Seeding)*: ~45 mins
+  - *Phase 3 (Version-Controlled REST API & OCC)*: ~60 mins
+  - *Phase 4 (React Dashboard, Draft State & Conflict UX)*: ~90 mins
+  - *Phase 5 (Testing, Edge Cases & Verification)*: ~40 mins
+- **AI Assistance**:
+  - Google DeepMind Antigravity IDE (Gemini agent) was utilized as an AI pair-programming assistant for boilerplate scaffolding, test authoring, code review issue identification, and documentation refinement.
+  - All architecture decisions, atomic update mechanics, strict database guards, and React draft management patterns were reviewed and validated against assignment specifications.
