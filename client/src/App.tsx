@@ -1,124 +1,183 @@
-import { useState, useEffect } from 'react'
-
-interface HealthResponse {
-  status: string
-  message: string
-  timestamp?: string
-}
+import { Header } from './components/Header'
+import { DishCard } from './components/DishCard'
+import { useDishDashboard } from './hooks/useDishDashboard'
 
 export default function App() {
-  const [healthStatus, setHealthStatus] = useState<HealthResponse | null>(null)
-  const [loading, setLoading] = useState<boolean>(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const checkHealth = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const response = await fetch('http://localhost:5000/health')
-      if (!response.ok) {
-        throw new Error(`Server responded with ${response.status}`)
-      }
-      const data: HealthResponse = await response.json()
-      setHealthStatus(data)
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message)
-      } else {
-        setError('Failed to reach backend')
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    // Attempt non-blocking check on load
-    checkHealth()
-  }, [])
+  const {
+    dishes,
+    drafts,
+    savingMap,
+    errorMap,
+    conflictMap,
+    isLoading,
+    globalError,
+    unsavedCount,
+    publishedCount,
+    loadDishes,
+    updateDraftName,
+    updateDraftPublished,
+    discardDraft,
+    saveDraft,
+    reloadLatest,
+    dismissConflict,
+  } = useDishDashboard()
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-orange-500 selection:text-white">
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-950/70 backdrop-blur px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <span className="text-2xl font-black bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">
-              NOSH
-            </span>
-            <span className="text-xs uppercase tracking-widest font-semibold px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20">
-              Dish Dashboard
-            </span>
+      <Header
+        totalDishes={dishes.length}
+        publishedCount={publishedCount}
+        unsavedCount={unsavedCount}
+        onRefresh={loadDishes}
+        isLoading={isLoading}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
+        {/* Loading State */}
+        {isLoading && dishes.length === 0 && (
+          <div
+            data-testid="loading-state"
+            className="flex flex-col items-center justify-center py-24 space-y-4 text-center"
+          >
+            <div className="relative">
+              <div className="w-12 h-12 rounded-full border-2 border-orange-500/20 border-t-orange-500 animate-spin"></div>
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-200">
+                Loading Menu Dishes
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Fetching catalog records from backend API...
+              </p>
+            </div>
           </div>
-          <span className="text-xs text-slate-400 font-mono">Phase 1: Project Foundation</span>
-        </div>
-      </header>
+        )}
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-12 flex flex-col items-center justify-center text-center">
-        <div className="max-w-2xl space-y-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Foundation Initialized
-          </div>
-
-          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-white">
-            Dish Dashboard — Draft Editing &amp; Safe Updates
-          </h1>
-
-          <p className="text-slate-400 text-base leading-relaxed">
-            Project foundation is set up with Vite, React, TypeScript, and Tailwind CSS on the client,
-            paired with Express, TypeScript, and local MongoDB on the backend.
-          </p>
-
-          {/* Backend Health Check Card */}
-          <div className="mt-8 p-6 rounded-xl bg-slate-800/60 border border-slate-700/60 text-left space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-200">Backend Health Status</h3>
-                <p className="text-xs text-slate-400">Endpoint: <code className="text-orange-300">GET http://localhost:5000/health</code></p>
-              </div>
-              <button
-                onClick={checkHealth}
-                disabled={loading}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-orange-500 hover:bg-orange-600 active:scale-95 text-white transition disabled:opacity-50"
+        {/* Global Error State */}
+        {globalError && (
+          <div
+            data-testid="api-error-state"
+            role="alert"
+            className="max-w-xl mx-auto my-12 p-6 rounded-2xl bg-red-950/40 border border-red-800/50 text-center space-y-4 shadow-xl"
+          >
+            <div className="w-12 h-12 mx-auto rounded-full bg-red-900/40 text-red-400 flex items-center justify-center">
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
               >
-                {loading ? 'Checking...' : 'Check Status'}
-              </button>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-red-300">
+                Failed to Load Dishes
+              </h3>
+              <p className="text-xs text-red-200/80 mt-1.5">{globalError}</p>
+            </div>
+            <button
+              type="button"
+              onClick={loadDishes}
+              className="px-4 py-2 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white transition shadow"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!isLoading && !globalError && dishes.length === 0 && (
+          <div
+            data-testid="empty-state"
+            className="max-w-md mx-auto my-20 p-8 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-3"
+          >
+            <div className="w-10 h-10 mx-auto rounded-full bg-slate-800 text-slate-400 flex items-center justify-center">
+              🍽️
+            </div>
+            <h3 className="text-sm font-semibold text-slate-300">
+              No Dishes Found
+            </h3>
+            <p className="text-xs text-slate-500">
+              The database does not contain any dish records yet. Run{' '}
+              <code className="text-orange-400 font-mono">npm run seed</code> in
+              the server folder to populate initial dishes.
+            </p>
+            <button
+              type="button"
+              onClick={loadDishes}
+              className="mt-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            >
+              Check Again
+            </button>
+          </div>
+        )}
+
+        {/* Dishes Grid */}
+        {!globalError && dishes.length > 0 && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-900">
+              <div>
+                <h2 className="text-lg font-bold text-slate-100">
+                  Dish Catalog
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Edit names and publication flags locally as drafts. Click Save
+                  to persist changes with version protection.
+                </p>
+              </div>
+              {unsavedCount > 0 && (
+                <div className="text-xs text-amber-400/90 font-medium bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/20 self-start sm:self-auto">
+                  💡 You have {unsavedCount} unsaved {unsavedCount === 1 ? 'draft' : 'drafts'}. Unsaved changes will be lost if you refresh.
+                </div>
+              )}
             </div>
 
-            {loading && <div className="text-xs text-slate-400">Pinging backend...</div>}
-            {error && (
-              <div className="text-xs p-3 rounded-lg bg-red-900/30 border border-red-700/50 text-red-300">
-                Backend connection failed: {error} (Ensure backend server is running on port 5000)
-              </div>
-            )}
-            {healthStatus && (
-              <div className="text-xs p-3 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300 font-mono space-y-1">
-                <div>Status: <span className="font-bold">{healthStatus.status}</span></div>
-                <div>Message: {healthStatus.message}</div>
-                {healthStatus.timestamp && <div>Timestamp: {healthStatus.timestamp}</div>}
-              </div>
-            )}
-          </div>
+            <div
+              data-testid="dishes-grid"
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            >
+              {dishes.map((dish) => {
+                const draft = drafts[dish.dishId] || {
+                  dishName: dish.dishName,
+                  isPublished: dish.isPublished,
+                }
+                const isSaving = Boolean(savingMap[dish.dishId])
+                const error = errorMap[dish.dishId] || null
+                const conflict = conflictMap[dish.dishId] || null
 
-          {/* Tech Stack Pills */}
-          <div className="pt-4 flex flex-wrap justify-center gap-2">
-            {['React 19', 'TypeScript', 'Vite', 'Tailwind CSS', 'Node.js', 'Express', 'Zod', 'MongoDB / Mongoose'].map((tech) => (
-              <span
-                key={tech}
-                className="px-2.5 py-1 text-xs font-medium rounded-md bg-slate-800 text-slate-300 border border-slate-700"
-              >
-                {tech}
-              </span>
-            ))}
+                return (
+                  <DishCard
+                    key={dish.dishId}
+                    dish={dish}
+                    draft={draft}
+                    isSaving={isSaving}
+                    error={error}
+                    conflict={conflict}
+                    onNameChange={updateDraftName}
+                    onPublishChange={updateDraftPublished}
+                    onSave={saveDraft}
+                    onDiscard={discardDraft}
+                    onReloadLatest={reloadLatest}
+                    onDismissConflict={dismissConflict}
+                  />
+                )
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-800 py-4 text-center text-xs text-slate-500">
-        Nosh Full Stack Intern Assignment &bull; Phase 1 Foundation
+      <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500 bg-slate-950/60">
+        Nosh Full Stack Intern Assignment &bull; Dish Dashboard &bull; Phase 4
       </footer>
     </div>
   )

@@ -6,11 +6,11 @@ A full-stack dashboard for managing dish catalogs, supporting draft editing and 
 
 ### Tech Stack
 
-- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS
+- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Vitest, React Testing Library
 - **Backend**: Node.js, Express.js, TypeScript
 - **Database**: Local MongoDB with Mongoose
 - **Validation**: Zod
-- **Testing**: Vitest & Supertest
+- **Testing**: Vitest, React Testing Library, Supertest
 
 ---
 
@@ -20,9 +20,21 @@ A full-stack dashboard for managing dish catalogs, supporting draft editing and 
 NOSHAssignment/
 ├── client/                     # Frontend React + Vite + Tailwind CSS application
 │   ├── src/
-│   │   ├── App.tsx             # Foundation dashboard landing & health status checker
-│   │   ├── index.css           # Tailwind CSS imports & base styles
-│   │   └── main.tsx            # React entrypoint
+│   │   ├── components/
+│   │   │   ├── ConflictBanner.tsx    # Conflict alert with Reload latest action and discard warning
+│   │   │   ├── DishCard.tsx          # Card displaying image, status, version, draft inputs & actions
+│   │   │   ├── Header.tsx            # Header branding, statistics, and refresh action
+│   │   │   └── ImageWithFallback.tsx # Image loader with fallback placeholder
+│   │   ├── hooks/
+│   │   │   └── useDishDashboard.ts   # Draft state management, OCC updates, and conflicts
+│   │   ├── services/
+│   │   │   └── api.ts                # REST API client (fetchDishes, updateDish)
+│   │   ├── types/
+│   │   │   └── dish.ts               # TypeScript interfaces for dishes, drafts, and responses
+│   │   ├── App.tsx                   # Main Dish Dashboard UI
+│   │   ├── App.test.tsx              # Component & integration test suite (10 tests)
+│   │   ├── index.css                 # Tailwind CSS imports & base styles
+│   │   └── main.tsx                  # React entrypoint
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── vite.config.ts
@@ -48,7 +60,8 @@ NOSHAssignment/
 │   ├── tests/
 │   │   ├── dish.test.ts        # Comprehensive API tests for GET /dishes and PATCH /dishes/:dishId
 │   │   ├── health.test.ts      # Automated health endpoint test
-│   │   └── seed.test.ts        # Unit & safe integration tests for seed logic
+│   │   ├── seed.test.ts        # Unit & safe integration tests for seed logic
+│   │   └── test-utils.ts       # Test DB URI validator & safe cleanup helpers
 │   ├── .env.example            # Example environment variables
 │   ├── package.json
 │   └── tsconfig.json
@@ -251,6 +264,26 @@ Returned when the requested `dishId` does not exist in the database:
 
 ---
 
+### Dashboard Features (Phase 4)
+
+1. **Responsive Dish Catalog**:
+   - Renders dishes with responsive grid layout (mobile, tablet, desktop).
+   - Displays dish image, ID, name, live/draft publication status badge, and version badge.
+   - Graceful fallback placeholder if image URL fails to load.
+2. **Local Draft Editing**:
+   - Editing name or publication status updates the local draft only. No backend requests occur while typing or toggling.
+   - Dishes with edits display an amber `Unsaved draft` badge and the header displays an active unsaved count.
+   - **Discard** button restores the last server-saved values.
+3. **Optimistic Locking & Conflict Resolution**:
+   - Save sends changed fields with `expectedVersion`.
+   - On `409 Conflict`:
+     - Preserves the user's current draft so work is never lost.
+     - Displays conflict banner with current server version and data.
+     - Offers **Reload latest** action with explicit warning that reloading discards the local draft.
+   - Duplicate submissions are prevented while a save is in flight.
+
+---
+
 ### Running the Applications
 
 #### 1. Start the Backend Server
@@ -265,7 +298,7 @@ Available server scripts:
 - `npm run seed`: Executes the idempotent database seed script
 - `npm run build`: Compiles TypeScript to JavaScript in `dist/`
 - `npm start`: Runs the compiled production server (`dist/server.js`)
-- `npm test`: Runs automated test suite via Vitest
+- `npm test`: Runs automated test suite via Vitest (29 tests)
 
 #### 2. Start the Frontend Client
 In a separate terminal:
@@ -275,13 +308,26 @@ npm run dev
 ```
 The Vite development server will start at `http://localhost:5173`.
 
+Available client scripts:
+- `npm run dev`: Starts Vite dev server
+- `npm run build`: Type-checks and compiles production bundle to `dist/`
+- `npm test`: Runs Vitest component & integration test suite (10 tests)
+- `npm run preview`: Previews the production build
+
 ---
 
 ### Running Tests
 
-Automated tests execute safely against an isolated test database (`nosh_test_isolated_suite`). The developer's main database (`nosh`) is **never** reset or cleared:
-
+#### Backend Test Suite (29 tests):
 ```bash
 cd server
 npm test
 ```
+*Executes against an isolated test database (`nosh_test_isolated_suite`). The main database (`nosh`) is protected.*
+
+#### Frontend Test Suite (10 tests):
+```bash
+cd client
+npm test
+```
+*Executes all UI, draft editing, discard, save, duplicate prevention, error, and conflict tests via Vitest & React Testing Library.*
