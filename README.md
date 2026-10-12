@@ -32,7 +32,7 @@ NOSHAssignment/
 │   │   ├── types/
 │   │   │   └── dish.ts               # TypeScript interfaces for dishes, drafts, and responses
 │   │   ├── App.tsx                   # Main Dish Dashboard UI
-│   │   ├── App.test.tsx              # Component & integration test suite (10 tests)
+│   │   ├── App.test.tsx              # Component & integration test suite (14 tests)
 │   │   ├── index.css                 # Tailwind CSS imports & base styles
 │   │   └── main.tsx                  # React entrypoint
 │   ├── package.json
@@ -80,7 +80,7 @@ NOSHAssignment/
     - `vitest` (`^5.0.4`): `^22.12.0 || ^24.0.0 || >=26.0.0`
     - `vite` (`^8.3.0`): `^20.19.0 || >=22.12.0`
     - `vitest` (server `^3.0.4`): `^18.0.0 || ^20.0.0 || >=22.0.0`
-  - *Verification runtime notice:* All tests (33 backend, 12 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0** because it was the sole runtime available on this machine. Node.js v24.13.0 does **not** satisfy `jsdom`'s declared engine requirement (`^24.15.0`). Although all tests and builds succeed without errors under v24.13.0, strict engine-compliant environments require a Node.js release within `^22.22.2 || ^24.15.0 || >=26.0.0`.
+  - *Verification runtime notice:* All tests (35 backend, 14 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0** because it was the sole runtime available on this machine. Node.js v24.13.0 does **not** satisfy `jsdom`'s declared engine requirement (`^24.15.0`). Although all tests and builds succeed without errors under v24.13.0, strict engine-compliant environments require a Node.js release within `^22.22.2 || ^24.15.0 || >=26.0.0`.
 - **npm**: v10+ (tested on v10.8.0)
 - **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
 
