@@ -172,9 +172,9 @@ export const DishCard: React.FC<DishCardProps> = ({
           <div className="pt-2 flex items-center gap-2">
             <button
               type="submit"
-              disabled={!hasUnsavedChanges || isSaving}
+              disabled={!hasUnsavedChanges || isSaving || Boolean(conflict?.isConflicted)}
               className={`flex-1 py-2 px-3.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                hasUnsavedChanges && !isSaving
+                hasUnsavedChanges && !isSaving && !conflict?.isConflicted
                   ? 'bg-orange-500 hover:bg-orange-600 active:scale-98 text-white shadow-md shadow-orange-500/20 cursor-pointer'
                   : 'bg-slate-800/60 text-slate-500 border border-slate-800 cursor-not-allowed'
               }`}
@@ -202,6 +202,8 @@ export const DishCard: React.FC<DishCardProps> = ({
                   </svg>
                   <span>Saving...</span>
                 </>
+              ) : conflict?.isConflicted ? (
+                'Resolve conflict to save'
               ) : (
                 'Save'
               )}

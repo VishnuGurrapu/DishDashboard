@@ -381,4 +381,115 @@ describe('DishDashboard App (Phase 4)', () => {
     })
     expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
+
+  it('detects server version change on refresh with dirty draft and prevents saving without conflict resolution', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      // Initial GET /dishes returns v1
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+      // Subsequent GET /dishes returns Dish 1 updated to v2 by another user
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          dishes: [
+            {
+              ...sampleDishes[0],
+              dishName: "Alice's Remote Rice",
+              version: 2,
+            },
+            sampleDishes[1],
+          ],
+          total: 2,
+        }),
+      } as Response)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+    })
+
+    // 1. User makes a dirty draft edit to Dish 1
+    const nameInput = screen.getByDisplayValue('Jeera Rice')
+    fireEvent.change(nameInput, { target: { value: 'My Local Edit Rice' } })
+    expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+    // 2. Click Refresh button in Header
+    const refreshBtn = screen.getByRole('button', { name: /Refresh/i })
+    fireEvent.click(refreshBtn)
+
+    // 3. Verify:
+    // a. Draft is preserved
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('My Local Edit Rice')).toBeInTheDocument()
+    })
+    // b. Conflict banner is shown
+    expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Server updated to v2 while you had unsaved edits/i)
+    ).toBeInTheDocument()
+    // c. Save button is disabled and displays conflict resolution prompt
+    const card = screen.getByTestId('dish-card-1')
+    const saveBtn = card.querySelector('button[type="submit"]')!
+    expect(saveBtn).toBeDisabled()
+    expect(saveBtn).toHaveTextContent('Resolve conflict to save')
+
+    // 4. Resolve conflict by clicking "Reload latest (discard draft)"
+    const reloadBtn = screen.getByText('Reload latest (discard draft)')
+    fireEvent.click(reloadBtn)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Alice's Remote Rice")).toBeInTheDocument()
+      expect(screen.getByText('v2')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+  })
+
+  it('safely updates clean drafts to latest server version on refresh without conflict', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      // Initial GET /dishes
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+      // Refresh GET /dishes with Dish 2 updated to v2
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          dishes: [
+            sampleDishes[0],
+            {
+              ...sampleDishes[1],
+              dishName: 'Paneer Tikka Masala',
+              isPublished: true,
+              version: 2,
+            },
+          ],
+          total: 2,
+        }),
+      } as Response)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Paneer Tikka')).toBeInTheDocument()
+    })
+
+    // Dish 2 was NOT edited (draft is clean). Click Refresh.
+    const refreshBtn = screen.getByRole('button', { name: /Refresh/i })
+    fireEvent.click(refreshBtn)
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Paneer Tikka Masala')).toBeInTheDocument()
+    })
+    // No conflict banner because draft was not dirty
+    expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+  })
 })

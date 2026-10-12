@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Dish, DishDraft, ConflictState, DishPatchPayload } from '../types/dish'
 import { fetchDishes, updateDish } from '../services/api'
 
@@ -11,27 +11,94 @@ export const useDishDashboard = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [globalError, setGlobalError] = useState<string | null>(null)
 
+  // Keep live refs to avoid stale closures during asynchronous refresh operations
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+
+  const dishesRef = useRef(dishes)
+  dishesRef.current = dishes
+
+  const conflictMapRef = useRef(conflictMap)
+  conflictMapRef.current = conflictMap
+
   const loadDishes = useCallback(async () => {
     setIsLoading(true)
     setGlobalError(null)
     try {
       const fetchedDishes = await fetchDishes()
-      setDishes(fetchedDishes)
+      const currentDrafts = draftsRef.current
+      const currentDishes = dishesRef.current
+      const isInitialLoad = currentDishes.length === 0
 
-      // Initialize drafts for each dish without overwriting ongoing unsaved edits
-      setDrafts((prevDrafts) => {
-        const nextDrafts: Record<string, DishDraft> = { ...prevDrafts }
+      if (isInitialLoad) {
+        // Initial load: initialize both dishes and drafts directly
+        const initialDrafts: Record<string, DishDraft> = {}
         fetchedDishes.forEach((dish) => {
-          // If no draft exists yet, initialize from server dish
-          if (!nextDrafts[dish.dishId]) {
-            nextDrafts[dish.dishId] = {
-              dishName: dish.dishName,
-              isPublished: dish.isPublished,
+          initialDrafts[dish.dishId] = {
+            dishName: dish.dishName,
+            isPublished: dish.isPublished,
+          }
+        })
+        setDishes(fetchedDishes)
+        setDrafts(initialDrafts)
+      } else {
+        // Refresh with existing data:
+        // Safely evaluate each dish to ensure existing dirty drafts are never combined
+        // with newly fetched versions in a way that silently permits overwriting remote changes.
+        const nextDishes: Dish[] = []
+        const nextDrafts: Record<string, DishDraft> = { ...currentDrafts }
+        const newConflicts: Record<string, ConflictState | null> = {}
+
+        fetchedDishes.forEach((fetchedDish) => {
+          const prevBase = currentDishes.find((d) => d.dishId === fetchedDish.dishId)
+          const draft = currentDrafts[fetchedDish.dishId]
+
+          // Check if user currently has an unsaved dirty draft for this dish
+          const isDirty =
+            prevBase &&
+            draft &&
+            (draft.dishName !== prevBase.dishName ||
+              draft.isPublished !== prevBase.isPublished)
+
+          if (!isDirty) {
+            // Clean dish: safely adopt fetched dish and sync clean draft
+            nextDishes.push(fetchedDish)
+            nextDrafts[fetchedDish.dishId] = {
+              dishName: fetchedDish.dishName,
+              isPublished: fetchedDish.isPublished,
+            }
+            newConflicts[fetchedDish.dishId] = null
+          } else {
+            // Dirty draft: check if remote server record changed
+            const serverChanged =
+              !prevBase ||
+              fetchedDish.version !== prevBase.version ||
+              fetchedDish.dishName !== prevBase.dishName ||
+              fetchedDish.imageUrl !== prevBase.imageUrl ||
+              fetchedDish.isPublished !== prevBase.isPublished
+
+            if (serverChanged && prevBase) {
+              // Remote changes occurred while user has unsaved edits!
+              // 1. Preserve the user's draft in nextDrafts
+              // 2. Retain the original base dish (prevBase) so expectedVersion remains original
+              // 3. Mark the dish in conflict state requiring explicit resolution
+              nextDishes.push(prevBase)
+              newConflicts[fetchedDish.dishId] = {
+                isConflicted: true,
+                currentDish: fetchedDish,
+                message: `Server updated to v${fetchedDish.version} while you had unsaved edits. Please reload latest or discard changes to sync.`,
+              }
+            } else {
+              // Server did not change: retain existing base dish and dirty draft
+              nextDishes.push(prevBase || fetchedDish)
             }
           }
         })
-        return nextDrafts
-      })
+
+        setDishes(nextDishes)
+        setDrafts(nextDrafts)
+        setConflictMap((prev) => ({ ...prev, ...newConflicts }))
+      }
     } catch (err) {
       setGlobalError(
         err instanceof Error ? err.message : 'Failed to connect to dishes API.'
@@ -70,13 +137,23 @@ export const useDishDashboard = () => {
 
   const discardDraft = (dishId: string) => {
     const original = dishes.find((d) => d.dishId === dishId)
-    if (!original) return
+    const conflict = conflictMap[dishId]
+    // If a conflict existed, user discarding accepts the latest server record
+    const target = conflict?.currentDish || original
+    if (!target) return
+
+    if (conflict?.currentDish) {
+      // Update loaded dish to latest server record
+      setDishes((prev) =>
+        prev.map((d) => (d.dishId === dishId ? conflict.currentDish : d))
+      )
+    }
 
     setDrafts((prev) => ({
       ...prev,
       [dishId]: {
-        dishName: original.dishName,
-        isPublished: original.isPublished,
+        dishName: target.dishName,
+        isPublished: target.isPublished,
       },
     }))
     setErrorMap((prev) => ({ ...prev, [dishId]: null }))
@@ -84,6 +161,16 @@ export const useDishDashboard = () => {
   }
 
   const saveDraft = async (dishId: string) => {
+    // Prevent saving if there is an unresolved conflict
+    if (conflictMap[dishId]?.isConflicted) {
+      setErrorMap((prev) => ({
+        ...prev,
+        [dishId]:
+          'Cannot save: This dish has a pending version conflict. Please resolve it by reloading latest or discarding changes.',
+      }))
+      return
+    }
+
     const original = dishes.find((d) => d.dishId === dishId)
     const draft = drafts[dishId]
     if (!original || !draft) return

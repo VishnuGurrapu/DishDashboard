@@ -74,8 +74,8 @@ NOSHAssignment/
 
 ### Prerequisites
 
-- **Node.js**: v18+ (tested on v24.x)
-- **npm**: v9+ (tested on v10.x)
+- **Node.js**: v22+ (tested on v24.13.0; required by jsdom 30, Vite 8, and Vitest 5)
+- **npm**: v10+ (tested on v10.8.0)
 - **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
 
 To verify that your local MongoDB server is active:
