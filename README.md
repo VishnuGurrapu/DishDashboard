@@ -1,14 +1,14 @@
 # Nosh Full Stack Intern Assignment: Dish Dashboard
 
-## Phase 1: Project Foundation
+A full-stack dashboard for managing dish catalogs, supporting draft editing and safe concurrent updates.
 
-This project is a full-stack dashboard for managing dish catalogs, supporting draft editing and safe concurrent updates.
+---
 
 ### Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS
 - **Backend**: Node.js, Express.js, TypeScript
-- **Database**: Local MongoDB with Mongoose (configured for Phase 2)
+- **Database**: Local MongoDB with Mongoose
 - **Validation**: Zod
 - **Testing**: Vitest & Supertest
 
@@ -29,13 +29,23 @@ NOSHAssignment/
 ├── server/                     # Backend Express + TypeScript application
 │   ├── src/
 │   │   ├── config/
+│   │   │   ├── db.ts           # MongoDB connection lifecycle module
 │   │   │   └── env.ts          # Environment configuration
+│   │   ├── models/
+│   │   │   └── dish.model.ts   # Mongoose Dish model (dishId, dishName, imageUrl, isPublished, version)
 │   │   ├── routes/
 │   │   │   └── health.route.ts # GET /health route
+│   │   ├── schemas/
+│   │   │   └── dish.schema.ts  # Zod schemas for validating dish records
+│   │   ├── scripts/
+│   │   │   └── seed.ts         # Executable idempotent seed script CLI
+│   │   ├── services/
+│   │   │   └── seed.service.ts # Core seed logic & validation service
 │   │   ├── app.ts              # Express application & middleware
-│   │   └── server.ts           # Server HTTP listener
+│   │   └── server.ts           # Server HTTP listener (connects to MongoDB before listening)
 │   ├── tests/
-│   │   └── health.test.ts      # Automated health endpoint test
+│   │   ├── health.test.ts      # Automated health endpoint test
+│   │   └── seed.test.ts        # Unit & safe integration tests for seed logic
 │   ├── .env.example            # Example environment variables
 │   ├── package.json
 │   └── tsconfig.json
@@ -50,7 +60,13 @@ NOSHAssignment/
 
 - **Node.js**: v18+ (tested on v24.x)
 - **npm**: v9+ (tested on v10.x)
-- **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017` (required for upcoming Phase 2 data persistence)
+- **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
+
+To verify that your local MongoDB server is active:
+```powershell
+Test-NetConnection -ComputerName 127.0.0.1 -Port 27017
+```
+*(or on macOS/Linux: `nc -zv 127.0.0.1 27017`)*
 
 ---
 
@@ -82,11 +98,43 @@ cp .env.example .env
 ```
 *(On Windows PowerShell: `Copy-Item .env.example .env`)*
 
-Default `.env` configuration:
+Default `server/.env` configuration:
 ```env
 PORT=5000
 MONGODB_URI=mongodb://127.0.0.1:27017/nosh
 CLIENT_URL=http://localhost:5173
+```
+
+---
+
+### Database Seeding (`npm run seed`)
+
+The seed script reads from the root `dish-assignment.json` file, validates each entry using Zod, and loads the data into MongoDB idempotently:
+
+- **Unique identifier**: `dishId` (unique string).
+- **Default version**: New dishes are inserted with `version: 1`.
+- **Idempotency Guarantee**: If a dish already exists (even if edited or versioned up by users), the seed script **never overwrites** its fields or resets its version.
+- **Rerun safety**: Running `npm run seed` repeatedly only inserts records that are missing.
+
+To execute the seed script:
+```bash
+cd server
+npm run seed
+```
+
+Example output:
+```text
+🌱 Starting dish database seed script...
+✅ MongoDB connected successfully: 127.0.0.1/nosh
+📖 Reading seed source: C:\vishnuprojects\NOSHAssignment\dish-assignment.json
+----------------------------------------------------
+✨ Seed operation completed successfully:
+   Total items evaluated: 5
+   Newly inserted dishes:  5
+   Inserted IDs:          [1, 2, 3, 4, 5]
+   Preserved/skipped:     0
+----------------------------------------------------
+🔌 Disconnected from MongoDB
 ```
 
 ---
@@ -98,10 +146,11 @@ CLIENT_URL=http://localhost:5173
 cd server
 npm run dev
 ```
-The server will start on `http://localhost:5000`.
+The server will connect to MongoDB before accepting incoming HTTP requests on `http://localhost:5000`.
 
 Available server scripts:
 - `npm run dev`: Starts development server with live reload via `tsx watch`
+- `npm run seed`: Executes the idempotent database seed script
 - `npm run build`: Compiles TypeScript to JavaScript in `dist/`
 - `npm start`: Runs the compiled production server (`dist/server.js`)
 - `npm test`: Runs automated test suite via Vitest
@@ -114,16 +163,11 @@ npm run dev
 ```
 The Vite development server will start at `http://localhost:5173`.
 
-Available client scripts:
-- `npm run dev`: Starts the Vite development server
-- `npm run build`: Type-checks and builds production bundle in `dist/`
-- `npm run preview`: Previews the production build locally
-
 ---
 
 ### Verifying GET /health
 
-#### Option A: Using curl / terminal
+#### Using curl:
 ```bash
 curl http://localhost:5000/health
 ```
@@ -133,18 +177,16 @@ Expected response:
 {
   "status": "ok",
   "message": "Nosh Dish Dashboard API is healthy",
-  "timestamp": "2026-10-12T14:00:00.000Z"
+  "timestamp": "2026-10-12T14:28:16.164Z"
 }
 ```
-
-#### Option B: In the Web Browser
-Visit [http://localhost:5000/health](http://localhost:5000/health) or open the frontend at [http://localhost:5173](http://localhost:5173) and click **"Check Status"**.
 
 ---
 
 ### Running Tests
 
-To verify backend routes:
+Automated tests are non-destructive. Integration tests execute against an isolated test database (`nosh_test_isolated_suite`), ensuring the developer's main database (`nosh`) is **never** reset or cleared:
+
 ```bash
 cd server
 npm test

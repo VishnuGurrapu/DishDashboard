@@ -1,6 +1,10 @@
+import path from 'path'
 import dotenv from 'dotenv'
 
+// Load from current working directory
 dotenv.config()
+// Fallback to server/.env relative to this file
+dotenv.config({ path: path.resolve(__dirname, '../../.env') })
 
 export const config = {
   port: Number(process.env.PORT) || 5000,
