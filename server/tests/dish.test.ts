@@ -455,20 +455,20 @@ describe('Dishes API (/dishes)', () => {
     })
   })
 
-  describe('Persistence Across Backend Restarts & Database Immutability', () => {
-    it('persists dish updates and incremented version across simulated server restarts', async () => {
+  describe('Persistence Across Separate App Instances & Database Immutability', () => {
+    it('persists dish updates and incremented version across separate app instances backed by the same MongoDB database', async () => {
       // 1. App instance A performs an update on dish 101 from v1 -> v2
       const appInstanceA = createApp()
       const updateRes = await request(appInstanceA)
         .patch('/dishes/101')
         .send({
-          dishName: 'Restart-Proof Paneer Butter Masala',
+          dishName: 'Persistent Paneer Butter Masala',
           expectedVersion: 1,
         })
       expect(updateRes.status).toBe(200)
       expect(updateRes.body.dish.version).toBe(2)
 
-      // 2. Simulate server restart: create brand-new Express app instance B
+      // 2. Separate Express app instance B querying the same persistent MongoDB database
       const appInstanceB = createApp()
       const getRes = await request(appInstanceB).get('/dishes')
       expect(getRes.status).toBe(200)
@@ -477,12 +477,12 @@ describe('Dishes API (/dishes)', () => {
         (d: { dishId: string }) => d.dishId === '101'
       )
       expect(reloadedDish).toBeDefined()
-      expect(reloadedDish.dishName).toBe('Restart-Proof Paneer Butter Masala')
+      expect(reloadedDish.dishName).toBe('Persistent Paneer Butter Masala')
       expect(reloadedDish.version).toBe(2)
 
       // Verify direct MongoDB document
       const doc = await Dish.findOne({ dishId: '101' })
-      expect(doc?.dishName).toBe('Restart-Proof Paneer Butter Masala')
+      expect(doc?.dishName).toBe('Persistent Paneer Butter Masala')
       expect(doc?.version).toBe(2)
     })
 

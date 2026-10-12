@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import App from './App'
 import type { Dish } from './types/dish'
 
@@ -513,7 +513,7 @@ describe('DishDashboard App (Phase 4)', () => {
 
   it('simulates two independent concurrent dashboard sessions on the same dish with OCC conflict resolution', async () => {
     // Shared backend state simulation
-    let serverDish: Dish = {
+    let sharedServerDish: Dish = {
       dishId: '1',
       dishName: 'Original Rice',
       imageUrl: 'https://example.com/jeera.jpg',
@@ -529,7 +529,7 @@ describe('DishDashboard App (Phase 4)', () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ dishes: [{ ...serverDish }], total: 1 }),
+          json: async () => ({ dishes: [{ ...sharedServerDish }], total: 1 }),
         } as Response
       }
 
@@ -537,25 +537,25 @@ describe('DishDashboard App (Phase 4)', () => {
         const body = JSON.parse(String(init?.body || '{}'))
         const { expectedVersion, dishName, isPublished } = body
 
-        // Optimistic Concurrency Control check
-        if (expectedVersion !== serverDish.version) {
+        // Realistic OCC check against active shared server state
+        if (expectedVersion !== sharedServerDish.version) {
           return {
             ok: false,
             status: 409,
             json: async () => ({
               error: 'Conflict',
-              message: `Stale version conflict. Expected version ${expectedVersion}, but current version is ${serverDish.version}.`,
-              currentDish: { ...serverDish },
+              message: `Stale version conflict. Expected version ${expectedVersion}, but current version is ${sharedServerDish.version}.`,
+              currentDish: { ...sharedServerDish },
             }),
           } as Response
         }
 
         // Apply update and atomic version increment
-        serverDish = {
-          ...serverDish,
+        sharedServerDish = {
+          ...sharedServerDish,
           ...(dishName !== undefined ? { dishName } : {}),
           ...(isPublished !== undefined ? { isPublished } : {}),
-          version: serverDish.version + 1,
+          version: sharedServerDish.version + 1,
         }
 
         return {
@@ -563,7 +563,7 @@ describe('DishDashboard App (Phase 4)', () => {
           status: 200,
           json: async () => ({
             message: 'Dish updated successfully',
-            dish: { ...serverDish },
+            dish: { ...sharedServerDish },
           }),
         } as Response
       }
@@ -575,129 +575,81 @@ describe('DishDashboard App (Phase 4)', () => {
       } as Response
     })
 
-    // 1. Session A loads dashboard
-    const { unmount: unmountSessionA } = render(<App />)
+    // Mount two independent dashboard instances simultaneously in separate container elements
+    const containerA = document.createElement('div')
+    document.body.appendChild(containerA)
+    const containerB = document.createElement('div')
+    document.body.appendChild(containerB)
+
+    render(<App />, { container: containerA })
+    render(<App />, { container: containerB })
+
+    const sessionA = within(containerA)
+    const sessionB = within(containerB)
+
+    // Both sessions load the same dish at version 1 from the shared mocked backend
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Original Rice')).toBeInTheDocument()
-      expect(screen.getByText('v1')).toBeInTheDocument()
+      expect(sessionA.getByDisplayValue('Original Rice')).toBeInTheDocument()
+      expect(sessionA.getByText('v1')).toBeInTheDocument()
+      expect(sessionB.getByDisplayValue('Original Rice')).toBeInTheDocument()
+      expect(sessionB.getByText('v1')).toBeInTheDocument()
     })
 
-    // Session A edits dishName
-    const nameInputA = screen.getByDisplayValue('Original Rice')
+    // Edit the dish independently in both sessions before either session saves
+    const nameInputA = sessionA.getByDisplayValue('Original Rice')
     fireEvent.change(nameInputA, { target: { value: 'Rice Updated by Session A' } })
+    expect(sessionA.getByTestId('unsaved-badge')).toBeInTheDocument()
 
-    // Session A saves successfully
-    const saveBtnA = screen
+    const nameInputB = sessionB.getByDisplayValue('Original Rice')
+    fireEvent.change(nameInputB, { target: { value: 'Conflicting Rice by Session B' } })
+    expect(sessionB.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+    // Save Session A first
+    const saveBtnA = sessionA
       .getByTestId('dish-card-1')
       .querySelector('button[type="submit"]')!
     fireEvent.click(saveBtnA)
 
+    // Verify Session A updates and shared backend advances to version 2
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
-      expect(screen.getByText('v2')).toBeInTheDocument()
+      expect(sessionA.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
+      expect(sessionA.getByText('v2')).toBeInTheDocument()
     })
+    expect(sharedServerDish.dishName).toBe('Rice Updated by Session A')
+    expect(sharedServerDish.version).toBe(2)
+    expect(sessionA.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
 
-    // Unmount Session A so DOM is clean for Session B
-    unmountSessionA()
-
-    // 2. Now simulate Session B:
-    // Session B was opened while the dish was still version 1.
-    let sessionBInitialLoadDone = false
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      const urlStr = String(url)
-      const method = init?.method || 'GET'
-
-      if (urlStr.endsWith('/dishes') && method === 'GET') {
-        if (!sessionBInitialLoadDone) {
-          sessionBInitialLoadDone = true
-          // Stale initial state loaded in Session B (v1)
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              dishes: [
-                {
-                  dishId: '1',
-                  dishName: 'Original Rice',
-                  imageUrl: 'https://example.com/jeera.jpg',
-                  isPublished: true,
-                  version: 1,
-                },
-              ],
-              total: 1,
-            }),
-          } as Response
-        }
-        // Subsequent fetches return current server state (v2)
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ dishes: [{ ...serverDish }], total: 1 }),
-        } as Response
-      }
-
-      if (urlStr.includes('/dishes/1') && method === 'PATCH') {
-        const body = JSON.parse(String(init?.body || '{}'))
-        const { expectedVersion } = body
-        // Server rejects because expectedVersion (1) != serverDish.version (2)
-        if (expectedVersion !== serverDish.version) {
-          return {
-            ok: false,
-            status: 409,
-            json: async () => ({
-              error: 'Conflict',
-              message: `Stale version conflict. Expected version ${expectedVersion}, but current version is ${serverDish.version}.`,
-              currentDish: { ...serverDish },
-            }),
-          } as Response
-        }
-      }
-
-      return {
-        ok: false,
-        status: 404,
-        json: async () => ({ error: 'Not Found' }),
-      } as Response
-    })
-
-    render(<App />)
-    await waitFor(() => {
-      expect(screen.getByDisplayValue('Original Rice')).toBeInTheDocument()
-      expect(screen.getByText('v1')).toBeInTheDocument()
-    })
-
-    // Session B makes conflicting edits to the dish
-    const nameInputB = screen.getByDisplayValue('Original Rice')
-    fireEvent.change(nameInputB, { target: { value: 'Conflicting Rice by Session B' } })
-    expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
-
-    // Session B attempts to save its stale draft
-    const saveBtnB = screen
+    // Now attempt to save Session B with its stale version-1 expectedVersion
+    const saveBtnB = sessionB
       .getByTestId('dish-card-1')
       .querySelector('button[type="submit"]')!
     fireEvent.click(saveBtnB)
 
-    // 3. Verify Session B receives 409 Conflict, retains draft, and shows conflict banner
+    // Verify Session B receives 409 conflict, retains its draft, and shows conflict banner
     await waitFor(() => {
-      expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+      expect(sessionB.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
     })
     expect(nameInputB).toHaveValue('Conflicting Rice by Session B')
     expect(
-      screen.getByText(
+      sessionB.getByText(
         /Warning: Reloading replaces your current draft with the server version/i
       )
     ).toBeInTheDocument()
 
-    // 4. Session B explicitly resolves conflict by clicking Reload latest
-    const reloadBtn = screen.getByText('Reload latest (discard draft)')
-    fireEvent.click(reloadBtn)
+    // Explicitly reload Session A's saved version in Session B
+    const reloadBtnB = sessionB.getByText('Reload latest (discard draft)')
+    fireEvent.click(reloadBtnB)
 
-    // 5. Session B now displays Session A's saved version (v2)
+    // Verify Session B now displays Session A's saved version (v2) with draft cleared
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
-      expect(screen.getByText('v2')).toBeInTheDocument()
+      expect(sessionB.getByDisplayValue('Rice Updated by Session A')).toBeInTheDocument()
+      expect(sessionB.getByText('v2')).toBeInTheDocument()
     })
-    expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
-    expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+    expect(sessionB.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+    expect(sessionB.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+
+    // Cleanup containers
+    containerA.remove()
+    containerB.remove()
   })
 })

@@ -337,7 +337,7 @@ Coverage includes:
 - **REST Endpoints**: `GET /dishes` and `PATCH /dishes/:dishId` with atomic version-controlled updates.
 - **Concurrency & OCC**: Atomic incrementation, 409 conflict responses on stale versions, race condition handling with simultaneous requests.
 - **Validation Safeguards**: Empty/whitespace names, invalid types, missing fields, invalid/non-HTTP URLs on publishing.
-- **Persistence & Immutability**: Persistence across simulated backend restarts, and database immutability verification on validation errors and 409 conflicts.
+- **Persistence & Immutability**: Persistence across separate Express application instances backed by the same MongoDB database, and database immutability verification on validation errors and 409 conflicts.
 
 #### Frontend Test Suite (14 tests):
 ```bash
@@ -353,7 +353,7 @@ Coverage includes:
 - **Submission Guard**: Disables buttons and prevents duplicate submissions while requests are in flight.
 - **Optimistic Concurrency Control**: On 409 Conflict, preserves user draft, shows warning banner, and provides explicit reload latest option.
 - **Refresh Protection**: Detects server version bumps during refresh with dirty drafts and prevents saving until resolved.
-- **Multi-Session Concurrency**: Simulates two concurrent browser sessions editing the same dish, verifying Session A's save triggers OCC conflict in Session B, which preserves Session B's draft and permits reload resolution.
+- **Multi-Session Concurrency**: Simulates two independent concurrent dashboard sessions mounted simultaneously on the same dish with container-scoped queries, verifying Session A's save advances shared server state to version 2, while Session B's version-1 save receives a 409 conflict, preserves Session B's draft, and allows explicit reload resolution.
 
 ---
 
