@@ -11,6 +11,24 @@ export type UpdateDishResult =
     }
   | { status: 'bad_request'; message: string }
 
+/**
+ * Validates that a string is a complete, well-formed HTTP or HTTPS URL.
+ */
+export const isValidHttpUrl = (urlString?: string): boolean => {
+  if (!urlString || typeof urlString !== 'string') return false
+  const trimmed = urlString.trim()
+  if (!trimmed) return false
+
+  try {
+    const parsed = new URL(trimmed)
+    const validProtocol = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    const hasValidHost = parsed.hostname.length > 0 && !parsed.hostname.includes(' ')
+    return validProtocol && hasValidHost
+  } catch {
+    return false
+  }
+}
+
 export const getAllDishes = async (): Promise<
   Array<Omit<IDish, 'createdAt' | 'updatedAt'>>
 > => {
@@ -68,23 +86,23 @@ export const updateDishSafely = async (
   }
 
   // 3. Publishing integrity validation
-  // When publishing a dish (isPublished: true), require non-empty trimmed name and valid HTTP/HTTPS imageUrl
+  // When publishing a dish (isPublished: true), require non-empty trimmed name and valid complete HTTP/HTTPS imageUrl,
+  // validating the complete effective image URL including when derived from existing database record.
   if (input.isPublished === true) {
-    const effectiveName = input.dishName ?? currentDish.dishName
+    const effectiveName = (input.dishName ?? currentDish.dishName)?.trim()
     const effectiveImageUrl = input.imageUrl ?? currentDish.imageUrl
 
-    if (!effectiveName || effectiveName.trim().length === 0) {
+    if (!effectiveName || effectiveName.length === 0) {
       return {
         status: 'bad_request',
-        message: 'Publishing requires a non-empty dishName.',
+        message: 'Publishing requires a non-empty trimmed dishName.',
       }
     }
 
-    if (!effectiveImageUrl || !/^https?:\/\//i.test(effectiveImageUrl)) {
+    if (!isValidHttpUrl(effectiveImageUrl)) {
       return {
         status: 'bad_request',
-        message:
-          'Publishing requires a valid HTTP or HTTPS imageUrl.',
+        message: 'Publishing requires a valid HTTP or HTTPS imageUrl.',
       }
     }
   }

@@ -3,36 +3,64 @@ import request from 'supertest'
 import mongoose from 'mongoose'
 import { createApp } from '../src/app'
 import { Dish } from '../src/models/dish.model'
+import {
+  connectTestDatabase,
+  safeDropTestDatabase,
+  validateTestDbUri,
+} from './test-utils'
 
 const TEST_DB_URI =
   process.env.MONGODB_TEST_URI || 'mongodb://127.0.0.1:27017/nosh_test_isolated_suite'
 
+describe('Database Safety & Cleanup Protections', () => {
+  it('rejects unsafe test URIs pointing to main nosh or non-test databases', () => {
+    expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/nosh')).toThrowError(
+      /Unsafe MONGODB_TEST_URI rejected/i
+    )
+    expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/production_db')).toThrowError(
+      /Unsafe MONGODB_TEST_URI rejected/i
+    )
+    expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/')).toThrowError(
+      /Missing database name/i
+    )
+  })
+
+  it('accepts valid isolated test URIs containing "test"', () => {
+    const dbName = validateTestDbUri('mongodb://127.0.0.1:27017/nosh_test_isolated_suite')
+    expect(dbName).toBe('nosh_test_isolated_suite')
+  })
+
+  it('safeDropTestDatabase refuses to drop non-test or main database', async () => {
+    const fakeConn = {
+      connection: {
+        name: 'nosh',
+        dropDatabase: async () => {},
+      },
+    } as unknown as typeof mongoose
+
+    await expect(safeDropTestDatabase(fakeConn)).rejects.toThrowError(
+      /Unsafe test cleanup rejected/i
+    )
+  })
+})
+
 describe('Dishes API (/dishes)', () => {
   const app = createApp()
-  let isDbConnected = false
 
   beforeAll(async () => {
-    try {
-      await mongoose.connect(TEST_DB_URI, { serverSelectionTimeoutMS: 2000 })
-      isDbConnected = true
-    } catch {
-      console.warn('⚠️ MongoDB not reachable for test suite.')
-    }
+    // Fails the test suite immediately if connection fails, instead of silently bypassing assertions
+    await connectTestDatabase(TEST_DB_URI)
   })
 
   afterAll(async () => {
-    if (isDbConnected) {
-      try {
-        await mongoose.connection.dropDatabase()
-        await mongoose.disconnect()
-      } catch (err) {
-        console.error('Error during test cleanup:', err)
-      }
+    try {
+      await safeDropTestDatabase(mongoose)
+    } finally {
+      await mongoose.disconnect()
     }
   })
 
   beforeEach(async () => {
-    if (!isDbConnected) return
     // Reset test collection in the isolated test DB
     await Dish.deleteMany({})
 
@@ -57,8 +85,6 @@ describe('Dishes API (/dishes)', () => {
 
   describe('GET /dishes', () => {
     it('returns all dishes from MongoDB with required fields', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app).get('/dishes')
 
       expect(response.status).toBe(200)
@@ -80,8 +106,6 @@ describe('Dishes API (/dishes)', () => {
 
   describe('PATCH /dishes/:dishId - Successful Updates & Version Increment', () => {
     it('updates dishName and increments version from 1 to 2', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -103,8 +127,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('updates isPublished explicitly when provided', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/102')
         .send({
@@ -122,8 +144,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('updates both dishName and isPublished together', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/102')
         .send({
@@ -141,8 +161,6 @@ describe('Dishes API (/dishes)', () => {
 
   describe('PATCH /dishes/:dishId - Concurrency & Conflicts', () => {
     it('returns 409 Conflict with current dish when expectedVersion is stale', async () => {
-      if (!isDbConnected) return
-
       // First update increments version to 2
       await request(app)
         .patch('/dishes/101')
@@ -173,8 +191,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('ensures concurrent requests using the same expectedVersion cannot both succeed', async () => {
-      if (!isDbConnected) return
-
       // Fire two concurrent requests with identical expectedVersion
       const request1 = request(app)
         .patch('/dishes/101')
@@ -196,10 +212,8 @@ describe('Dishes API (/dishes)', () => {
     })
   })
 
-  describe('PATCH /dishes/:dishId - Validation Errors', () => {
+  describe('PATCH /dishes/:dishId - Validation Errors & Publishing Safeguards', () => {
     it('rejects empty dishName with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -212,8 +226,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects whitespace-only dishName with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -226,8 +238,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects non-string dishName with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -240,8 +250,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects missing expectedVersion with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -253,8 +261,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects invalid expectedVersion values (string, negative, float)', async () => {
-      if (!isDbConnected) return
-
       const resString = await request(app)
         .patch('/dishes/101')
         .send({ dishName: 'Valid Name', expectedVersion: '1' })
@@ -272,8 +278,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects non-boolean isPublished with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -285,8 +289,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects invalid image URL protocols with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -298,8 +300,6 @@ describe('Dishes API (/dishes)', () => {
     })
 
     it('rejects request with no update fields provided with 400 Bad Request', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/101')
         .send({
@@ -309,20 +309,18 @@ describe('Dishes API (/dishes)', () => {
       expect(response.status).toBe(400)
     })
 
-    it('rejects publishing a dish if effective image URL is invalid', async () => {
-      if (!isDbConnected) return
-
-      // Create a test dish with broken image URL
+    it('rejects publishing when existing dish in DB has malformed URL', async () => {
+      // Create a test dish with malformed URL in DB
       await Dish.create({
-        dishId: 'broken-img',
-        dishName: 'Broken Image Dish',
-        imageUrl: 'not-a-url',
+        dishId: 'broken-img-1',
+        dishName: 'Malformed URL Dish',
+        imageUrl: 'https://',
         isPublished: false,
         version: 1,
       })
 
       const response = await request(app)
-        .patch('/dishes/broken-img')
+        .patch('/dishes/broken-img-1')
         .send({
           isPublished: true,
           expectedVersion: 1,
@@ -331,12 +329,44 @@ describe('Dishes API (/dishes)', () => {
       expect(response.status).toBe(400)
       expect(response.body.message).toMatch(/valid HTTP or HTTPS/i)
     })
+
+    it('rejects publishing when existing dish in DB has non-HTTP protocol URL', async () => {
+      await Dish.create({
+        dishId: 'ftp-img',
+        dishName: 'FTP URL Dish',
+        imageUrl: 'ftp://files.example.com/pic.jpg',
+        isPublished: false,
+        version: 1,
+      })
+
+      const response = await request(app)
+        .patch('/dishes/ftp-img')
+        .send({
+          isPublished: true,
+          expectedVersion: 1,
+        })
+
+      expect(response.status).toBe(400)
+      expect(response.body.message).toMatch(/valid HTTP or HTTPS/i)
+    })
+
+    it('allows publishing when existing dish has a valid HTTP/HTTPS URL', async () => {
+      // Dish 102 was inserted with valid URL 'https://example.com/naan.jpg' and isPublished: false
+      const response = await request(app)
+        .patch('/dishes/102')
+        .send({
+          isPublished: true,
+          expectedVersion: 1,
+        })
+
+      expect(response.status).toBe(200)
+      expect(response.body.dish.isPublished).toBe(true)
+      expect(response.body.dish.version).toBe(2)
+    })
   })
 
   describe('PATCH /dishes/:dishId - Unknown Dish ID', () => {
     it('returns 404 Not Found when updating non-existent dish', async () => {
-      if (!isDbConnected) return
-
       const response = await request(app)
         .patch('/dishes/non-existent-999')
         .send({

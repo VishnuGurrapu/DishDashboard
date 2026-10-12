@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import mongoose from 'mongoose'
 import { Dish } from '../src/models/dish.model'
 import { validateSeedData, seedDishes } from '../src/services/seed.service'
+import { connectTestDatabase, safeDropTestDatabase } from './test-utils'
 
 const TEST_DB_URI =
   process.env.MONGODB_TEST_URI || 'mongodb://127.0.0.1:27017/nosh_test_isolated_suite'
@@ -73,35 +74,24 @@ describe('Seed Validation Logic (Unit)', () => {
 })
 
 describe('Seed Database Operation & Idempotency (Safe Test DB)', () => {
-  let isDbConnected = false
-
   beforeAll(async () => {
-    try {
-      // Connect exclusively to an isolated test database, NEVER the developer's main database
-      await mongoose.connect(TEST_DB_URI, { serverSelectionTimeoutMS: 2000 })
-      isDbConnected = true
-      // Clear only the test collection inside nosh_test_isolated_suite
-      await Dish.deleteMany({})
-    } catch {
-      console.warn('⚠️ MongoDB not reachable for integration test; skipping live DB test.')
-    }
+    // Connect exclusively to an isolated test database, NEVER the developer's main database
+    // Fails fast if connection fails
+    await connectTestDatabase(TEST_DB_URI)
+    // Clear only the test collection inside nosh_test_isolated_suite
+    await Dish.deleteMany({})
   })
 
   afterAll(async () => {
-    if (isDbConnected) {
-      try {
-        // Drop only the isolated test database and disconnect
-        await mongoose.connection.dropDatabase()
-        await mongoose.disconnect()
-      } catch (err) {
-        console.error('Error during test cleanup:', err)
-      }
+    try {
+      // Safe drop verifying it is strictly an isolated test database
+      await safeDropTestDatabase(mongoose)
+    } finally {
+      await mongoose.disconnect()
     }
   })
 
   it('inserts missing dishes with default version 1', async () => {
-    if (!isDbConnected) return
-
     const sampleDishes = [
       {
         dishId: 'test-1',
@@ -128,8 +118,6 @@ describe('Seed Database Operation & Idempotency (Safe Test DB)', () => {
   })
 
   it('is strictly idempotent and never overwrites existing edits or resets versions', async () => {
-    if (!isDbConnected) return
-
     // Simulate an edit on test-1 made by a user: change name and bump version to 3
     await Dish.updateOne(
       { dishId: 'test-1' },
