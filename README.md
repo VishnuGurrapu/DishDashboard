@@ -74,7 +74,8 @@ NOSHAssignment/
 
 ### Prerequisites
 
-- **Node.js**: v22+ (tested on v24.13.0; required by jsdom 30, Vite 8, and Vitest 5)
+- **Node.js**: Compatible engine range `^22.22.2 || ^24.15.0 || >=26.0.0` (per dependencies' declared engines: `jsdom` `^22.22.2 || ^24.15.0 || >=26.0.0`, `vitest` `^22.12.0 || ^24.0.0 || >=26.0.0`, `vite` `^20.19.0 || >=22.12.0`).
+  - *Verified runtime:* Tested and verified on **Node.js v24.13.0** with **npm v10.8.0** (only this specific version was executed in the test environment).
 - **npm**: v10+ (tested on v10.8.0)
 - **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
 
@@ -298,7 +299,7 @@ Available server scripts:
 - `npm run seed`: Executes the idempotent database seed script
 - `npm run build`: Compiles TypeScript to JavaScript in `dist/`
 - `npm start`: Runs the compiled production server (`dist/server.js`)
-- `npm test`: Runs automated test suite via Vitest (29 tests)
+- `npm test`: Runs automated test suite via Vitest (33 tests)
 
 #### 2. Start the Frontend Client
 In a separate terminal:
@@ -311,23 +312,23 @@ The Vite development server will start at `http://localhost:5173`.
 Available client scripts:
 - `npm run dev`: Starts Vite dev server
 - `npm run build`: Type-checks and compiles production bundle to `dist/`
-- `npm test`: Runs Vitest component & integration test suite (10 tests)
+- `npm test`: Runs Vitest component & integration test suite (12 tests)
 - `npm run preview`: Previews the production build
 
 ---
 
 ### Running Tests
 
-#### Backend Test Suite (29 tests):
+#### Backend Test Suite (33 tests):
 ```bash
 cd server
 npm test
 ```
-*Executes against an isolated test database (`nosh_test_isolated_suite`). The main database (`nosh`) is protected.*
+*Executes against an isolated test database (`nosh_test_isolated_suite` or `nosh_test`). The main database (`nosh`), `production_test`, development, and all unapproved databases are rejected by a strict allowlist guard.*
 
-#### Frontend Test Suite (10 tests):
+#### Frontend Test Suite (12 tests):
 ```bash
 cd client
 npm test
 ```
-*Executes all UI, draft editing, discard, save, duplicate prevention, error, and conflict tests via Vitest & React Testing Library.*
+*Executes all UI, draft editing, discard, save, duplicate prevention, refresh conflict handling, error, and conflict tests via Vitest & React Testing Library.*

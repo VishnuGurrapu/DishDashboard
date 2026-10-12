@@ -12,35 +12,111 @@ import {
 const TEST_DB_URI =
   process.env.MONGODB_TEST_URI || 'mongodb://127.0.0.1:27017/nosh_test_isolated_suite'
 
-describe('Database Safety & Cleanup Protections', () => {
-  it('rejects unsafe test URIs pointing to main nosh or non-test databases', () => {
+describe('Database Safety & Cleanup Protections (Strict Allowlist)', () => {
+  it('accepts explicitly approved test database URIs', () => {
+    expect(validateTestDbUri('mongodb://127.0.0.1:27017/nosh_test')).toBe('nosh_test')
+    expect(
+      validateTestDbUri('mongodb://127.0.0.1:27017/nosh_test_isolated_suite')
+    ).toBe('nosh_test_isolated_suite')
+    expect(
+      validateTestDbUri(
+        'mongodb+srv://user:pass@cluster.mongodb.net/nosh_test?retryWrites=true'
+      )
+    ).toBe('nosh_test')
+  })
+
+  it('rejects the normal nosh database', () => {
     expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/nosh')).toThrowError(
-      /Unsafe MONGODB_TEST_URI rejected/i
+      /Unsafe MONGODB_TEST_URI rejected: Database 'nosh' is not an approved test database/i
     )
-    expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/production_db')).toThrowError(
-      /Unsafe MONGODB_TEST_URI rejected/i
+  })
+
+  it('rejects production_test and closes the substring-match loophole', () => {
+    expect(() =>
+      validateTestDbUri('mongodb://127.0.0.1:27017/production_test')
+    ).toThrowError(
+      /Unsafe MONGODB_TEST_URI rejected: Database 'production_test' is not an approved test database/i
     )
+  })
+
+  it('rejects arbitrary unapproved databases (production, development, staging_test)', () => {
+    expect(() =>
+      validateTestDbUri('mongodb://127.0.0.1:27017/production')
+    ).toThrowError(/Unsafe MONGODB_TEST_URI rejected/i)
+    expect(() =>
+      validateTestDbUri('mongodb://127.0.0.1:27017/development')
+    ).toThrowError(/Unsafe MONGODB_TEST_URI rejected/i)
+    expect(() =>
+      validateTestDbUri('mongodb://127.0.0.1:27017/staging_test')
+    ).toThrowError(/Unsafe MONGODB_TEST_URI rejected/i)
+  })
+
+  it('fails safely when database name is missing', () => {
     expect(() => validateTestDbUri('mongodb://127.0.0.1:27017/')).toThrowError(
-      /Missing database name/i
+      /Missing database name in URI/i
+    )
+    expect(() => validateTestDbUri('mongodb://127.0.0.1:27017')).toThrowError(
+      /Missing database name in URI/i
     )
   })
 
-  it('accepts valid isolated test URIs containing "test"', () => {
-    const dbName = validateTestDbUri('mongodb://127.0.0.1:27017/nosh_test_isolated_suite')
-    expect(dbName).toBe('nosh_test_isolated_suite')
+  it('fails safely on malformed URIs', () => {
+    expect(() => validateTestDbUri('not-a-valid-uri')).toThrowError(
+      /Malformed MongoDB URI/i
+    )
+    expect(() => validateTestDbUri('http://127.0.0.1:27017/nosh_test')).toThrowError(
+      /Must begin with 'mongodb:\/\/'/i
+    )
+    expect(() => validateTestDbUri('mongodb://')).toThrowError(
+      /Malformed MongoDB URI/i
+    )
   })
 
-  it('safeDropTestDatabase refuses to drop non-test or main database', async () => {
-    const fakeConn = {
-      connection: {
-        name: 'nosh',
-        dropDatabase: async () => {},
-      },
+  it('safeDropTestDatabase strictly protects unapproved databases from being dropped', async () => {
+    // Rejects dropping normal nosh database
+    const noshConn = {
+      connection: { name: 'nosh', dropDatabase: async () => {} },
     } as unknown as typeof mongoose
+    await expect(safeDropTestDatabase(noshConn)).rejects.toThrowError(
+      /Unsafe test cleanup rejected: Refusing to drop database 'nosh'/i
+    )
 
-    await expect(safeDropTestDatabase(fakeConn)).rejects.toThrowError(
+    // Rejects dropping production_test
+    const prodTestConn = {
+      connection: { name: 'production_test', dropDatabase: async () => {} },
+    } as unknown as typeof mongoose
+    await expect(safeDropTestDatabase(prodTestConn)).rejects.toThrowError(
+      /Unsafe test cleanup rejected: Refusing to drop database 'production_test'/i
+    )
+
+    // Rejects dropping arbitrary unapproved database
+    const devConn = {
+      connection: { name: 'dev_database', dropDatabase: async () => {} },
+    } as unknown as typeof mongoose
+    await expect(safeDropTestDatabase(devConn)).rejects.toThrowError(
+      /Unsafe test cleanup rejected: Refusing to drop database 'dev_database'/i
+    )
+
+    // Rejects dropping unnamed database
+    const unnamedConn = {
+      connection: { name: '', dropDatabase: async () => {} },
+    } as unknown as typeof mongoose
+    await expect(safeDropTestDatabase(unnamedConn)).rejects.toThrowError(
       /Unsafe test cleanup rejected/i
     )
+
+    // Permits dropping approved test database
+    let dropped = false
+    const approvedConn = {
+      connection: {
+        name: 'nosh_test',
+        dropDatabase: async () => {
+          dropped = true
+        },
+      },
+    } as unknown as typeof mongoose
+    await safeDropTestDatabase(approvedConn)
+    expect(dropped).toBe(true)
   })
 })
 
