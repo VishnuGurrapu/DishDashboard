@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Dish, DishDraft, ConflictState, DishPatchPayload } from '../types/dish'
 import { fetchDishes, updateDish } from '../services/api'
+import { hasMeaningfulDraftChanges, normalizeDishName } from '../utils/dish'
 
 export const useDishDashboard = () => {
   const [dishes, setDishes] = useState<Dish[]>([])
@@ -53,12 +54,8 @@ export const useDishDashboard = () => {
           const prevBase = currentDishes.find((d) => d.dishId === fetchedDish.dishId)
           const draft = currentDrafts[fetchedDish.dishId]
 
-          // Check if user currently has an unsaved dirty draft for this dish
-          const isDirty =
-            prevBase &&
-            draft &&
-            (draft.dishName !== prevBase.dishName ||
-              draft.isPublished !== prevBase.isPublished)
+          // Check if user currently has an unsaved dirty draft for this dish using normalized comparison
+          const isDirty = hasMeaningfulDraftChanges(draft, prevBase)
 
           if (!isDirty) {
             // Clean dish: safely adopt fetched dish and sync clean draft
@@ -176,16 +173,17 @@ export const useDishDashboard = () => {
     if (!original || !draft) return
     if (savingMap[dishId]) return // Prevent duplicate submissions
 
-    // Check if there are changes
-    const hasNameChange = draft.dishName !== original.dishName
+    // Check if there are meaningful changes
+    const hasNameChange =
+      normalizeDishName(draft.dishName) !== normalizeDishName(original.dishName)
     const hasPublishChange = draft.isPublished !== original.isPublished
     if (!hasNameChange && !hasPublishChange) return
 
-    // Prepare payload sending only changed fields and expectedVersion
+    // Prepare payload sending only changed fields (with trimmed name) and expectedVersion
     const payload: DishPatchPayload = {
       expectedVersion: original.version,
     }
-    if (hasNameChange) payload.dishName = draft.dishName
+    if (hasNameChange) payload.dishName = normalizeDishName(draft.dishName)
     if (hasPublishChange) payload.isPublished = draft.isPublished
 
     // Mark dish as currently saving
@@ -255,14 +253,10 @@ export const useDishDashboard = () => {
     setConflictMap((prev) => ({ ...prev, [dishId]: null }))
   }
 
-  // Count unsaved drafts across all dishes
+  // Count unsaved drafts across all dishes using normalized comparison
   const unsavedCount = dishes.reduce((count, dish) => {
     const draft = drafts[dish.dishId]
-    if (!draft) return count
-    if (
-      draft.dishName !== dish.dishName ||
-      draft.isPublished !== dish.isPublished
-    ) {
+    if (hasMeaningfulDraftChanges(draft, dish)) {
       return count + 1
     }
     return count

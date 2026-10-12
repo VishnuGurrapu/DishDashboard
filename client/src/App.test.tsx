@@ -772,4 +772,208 @@ describe('DishDashboard App (Phase 4)', () => {
     const img = card.querySelector('img')
     expect(img).toHaveClass('object-cover')
   })
+
+  describe('Draft whitespace normalization and save trimming (Quality Pass)', () => {
+    it('does not mark a dish as modified when adding trailing whitespace to an unchanged name', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: 'Jeera Rice   ' } })
+
+      // Input value itself preserves what user typed
+      expect(input).toHaveValue('Jeera Rice   ')
+      // But it is not treated as a meaningful change
+      expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('global-unsaved-counter')).not.toBeInTheDocument()
+
+      const card = screen.getByTestId('dish-card-1')
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      expect(saveBtn).toBeDisabled()
+    })
+
+    it('does not mark a dish as modified when adding leading whitespace to an unchanged name', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: '   Jeera Rice' } })
+
+      expect(input).toHaveValue('   Jeera Rice')
+      expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('global-unsaved-counter')).not.toBeInTheDocument()
+
+      const card = screen.getByTestId('dish-card-1')
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      expect(saveBtn).toBeDisabled()
+    })
+
+    it('marks a dish as modified when changing actual characters in the name', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: 'Shahi Jeera Rice' } })
+
+      expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+      expect(screen.getByTestId('global-unsaved-counter')).toHaveTextContent('1 Unsaved Dish')
+
+      const card = screen.getByTestId('dish-card-1')
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      expect(saveBtn).not.toBeDisabled()
+    })
+
+    it('marks a dish as modified when toggling publication status even with whitespace in name', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      // Add trailing spaces (no meaningful name change)
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: 'Jeera Rice ' } })
+      expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+
+      // Toggle publication status
+      const card = screen.getByTestId('dish-card-1')
+      const checkbox = card.querySelector('input[type="checkbox"]')!
+      fireEvent.click(checkbox)
+
+      // Now marked as unsaved due to publication change
+      expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+      expect(screen.getByTestId('global-unsaved-counter')).toHaveTextContent('1 Unsaved Dish')
+
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      expect(saveBtn).not.toBeDisabled()
+    })
+
+    it('trims leading and trailing whitespace when saving a genuinely changed dish name', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            message: 'Dish updated successfully',
+            dish: {
+              ...sampleDishes[0],
+              dishName: 'Kashmiri Pulao',
+              version: 2,
+            },
+          }),
+        } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      const input = screen.getByDisplayValue('Jeera Rice')
+      // Type a genuine change with surrounding whitespace
+      fireEvent.change(input, { target: { value: '   Kashmiri Pulao   ' } })
+
+      const card = screen.getByTestId('dish-card-1')
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      fireEvent.click(saveBtn)
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenLastCalledWith(
+          expect.stringContaining('/dishes/1'),
+          expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+              expectedVersion: 1,
+              dishName: 'Kashmiri Pulao',
+            }),
+          })
+        )
+      })
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Kashmiri Pulao')).toBeInTheDocument()
+      })
+      expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+    })
+
+    it('rejects publishing attempt when draft name is empty or whitespace-only', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: 'Validation Error',
+            message: 'Publishing requires a non-empty trimmed dishName.',
+          }),
+        } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Paneer Tikka')).toBeInTheDocument()
+      })
+
+      // Dish 2 is currently unpublished (isPublished: false)
+      const input = screen.getByDisplayValue('Paneer Tikka')
+      fireEvent.change(input, { target: { value: '    ' } })
+
+      const card = screen.getByTestId('dish-card-2')
+      const checkbox = card.querySelector('input[type="checkbox"]')!
+      fireEvent.click(checkbox) // publish
+
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      fireEvent.click(saveBtn)
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Publishing requires a non-empty trimmed dishName.')
+        ).toBeInTheDocument()
+      })
+      // Draft remains intact for editing
+      expect(input).toHaveValue('    ')
+    })
+  })
 })

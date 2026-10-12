@@ -2,6 +2,7 @@ import React from 'react'
 import type { Dish, DishDraft, ConflictState } from '../types/dish'
 import { ImageWithFallback } from './ImageWithFallback'
 import { ConflictBanner } from './ConflictBanner'
+import { hasMeaningfulDraftChanges, normalizeDishName } from '../utils/dish'
 
 interface DishCardProps {
   dish: Dish
@@ -30,9 +31,9 @@ export const DishCard: React.FC<DishCardProps> = ({
   onReloadLatest,
   onDismissConflict,
 }) => {
-  const hasNameChange = draft.dishName !== dish.dishName
-  const hasPublishChange = draft.isPublished !== dish.isPublished
-  const hasUnsavedChanges = hasNameChange || hasPublishChange
+  const hasNameChange =
+    normalizeDishName(draft.dishName) !== normalizeDishName(dish.dishName)
+  const hasUnsavedChanges = hasMeaningfulDraftChanges(draft, dish)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

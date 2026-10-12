@@ -31,8 +31,10 @@ NOSHAssignment/
 │   │   │   └── api.ts                # REST API client (fetchDishes, updateDish)
 │   │   ├── types/
 │   │   │   └── dish.ts               # TypeScript interfaces for dishes, drafts, and responses
+│   │   ├── utils/
+│   │   │   └── dish.ts               # Shared normalization & meaningful change detection
 │   │   ├── App.tsx                   # Main Dish Dashboard UI
-│   │   ├── App.test.tsx              # Component & integration test suite (16 tests)
+│   │   ├── App.test.tsx              # Component & integration test suite (22 tests)
 │   │   ├── index.css                 # Tailwind CSS imports & base styles
 │   │   └── main.tsx                  # React entrypoint
 │   ├── package.json
@@ -80,21 +82,35 @@ NOSHAssignment/
     - `vitest` (`^5.0.4`): `^22.12.0 || ^24.0.0 || >=26.0.0`
     - `vite` (`^8.3.0`): `^20.19.0 || >=22.12.0`
     - `vitest` (server `^3.0.4`): `^18.0.0 || ^20.0.0 || >=22.0.0`
-  - *Verification runtime notice:* All tests (36 backend, 16 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0** because it was the sole runtime available on this machine. Node.js v24.13.0 does **not** satisfy `jsdom`'s declared engine requirement (`^24.15.0`). Although all tests and builds succeed without errors under v24.13.0, strict engine-compliant environments require a Node.js release within `^22.22.2 || ^24.15.0 || >=26.0.0`.
+  - *Verification runtime notice:* All tests (36 backend, 22 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0** because it was the sole runtime available on this machine. Node.js v24.13.0 does **not** satisfy `jsdom`'s declared engine requirement (`^24.15.0`). Although all tests and builds succeed without errors under v24.13.0, strict engine-compliant environments require a Node.js release within `^22.22.2 || ^24.15.0 || >=26.0.0`.
 - **npm**: v10+ (tested on v10.8.0)
 - **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
-
-To verify that your local MongoDB server is active:
-```powershell
-Test-NetConnection -ComputerName 127.0.0.1 -Port 27017
-```
-*(or on macOS/Linux: `nc -zv 127.0.0.1 27017`)*
+  - MongoDB must be running before starting the backend server or executing the seed command.
+  - To run MongoDB on Windows with a persistent data directory:
+    ```powershell
+    # Ensure data directory exists
+    New-Item -ItemType Directory -Force -Path "C:\data\db"
+    # Start MongoDB daemon
+    & "C:\Program Files\MongoDB\Server\9.0\bin\mongod.exe" --dbpath "C:\data\db"
+    ```
+    *(Alternatively, start via Windows Services: `net start MongoDB`)*
+  - To verify that your local MongoDB server is active:
+    ```powershell
+    Test-NetConnection -ComputerName 127.0.0.1 -Port 27017
+    ```
+    *(or on macOS/Linux: `nc -zv 127.0.0.1 27017`)*
 
 ---
 
-### Installation
+### Clone & Installation
 
-Install dependencies separately for both `client` and `server`:
+Clone the repository:
+```bash
+git clone https://github.com/VishnuGurrapu/DishDashboard.git
+cd DishDashboard
+```
+
+Install dependencies separately for both `server` and `client`:
 
 #### 1. Server Dependencies
 ```bash
@@ -112,31 +128,33 @@ npm install
 
 ### Environment Setup
 
-Create the local `.env` file for the backend:
+Create the local `.env` file for the backend (`server/.env`):
 
 ```bash
-cd server
+cd ../server
 cp .env.example .env
 ```
 *(On Windows PowerShell: `Copy-Item .env.example .env`)*
 
-Default `server/.env` configuration:
+The `server/.env` file contains:
 ```env
 PORT=5000
 MONGODB_URI=mongodb://127.0.0.1:27017/nosh
 CLIENT_URL=http://localhost:5173
 ```
+*Note: The backend reads `PORT`, `MONGODB_URI`, and `CLIENT_URL`. Never commit production credentials or secrets. The repository gitignores local `.env` files.*
 
 ---
 
 ### Database Seeding (`npm run seed`)
 
-The seed script reads from the root `dish-assignment.json` file, validates each entry using Zod, and loads the data into MongoDB idempotently:
+The seed script reads from the root `dish-assignment.json` file, validates each entry using Zod schemas (`dishSeedItemSchema`), and loads the records into MongoDB idempotently:
 
+- **Execution order**: Ensure MongoDB is running before invoking the seed command.
 - **Unique identifier**: `dishId` (unique string).
-- **Default version**: New dishes are inserted with `version: 1`.
-- **Idempotency Guarantee**: If a dish already exists (even if edited or versioned up by users), the seed script **never overwrites** its fields or resets its version.
-- **Rerun safety**: Running `npm run seed` repeatedly only inserts records that are missing.
+- **Default version**: Newly seeded dishes are inserted with `version: 1`.
+- **Idempotency Guarantee**: If a dish already exists (even if updated or versioned up by users), the seed script **never overwrites** its fields or resets its version.
+- **Rerun safety**: Running `npm run seed` repeatedly inserts only missing records without affecting existing records.
 
 To execute the seed script:
 ```bash
@@ -317,8 +335,56 @@ The Vite development server will start at `http://localhost:5173`.
 Available client scripts:
 - `npm run dev`: Starts Vite dev server
 - `npm run build`: Type-checks and compiles production bundle to `dist/`
-- `npm test`: Runs Vitest component & integration test suite (16 tests)
+- `npm test`: Runs Vitest component & integration test suite (22 tests)
 - `npm run preview`: Previews the production build
+
+---
+
+### Step-by-Step Manual Verification Guide
+
+You can manually verify all core behaviors in the browser at `http://localhost:5173`:
+
+1. **Draft Editing without Immediate Network Calls**:
+   - Open browser DevTools Network tab.
+   - Type in a dish name field or toggle the publication switch.
+   - Observe that no HTTP requests are sent while typing or toggling. The card immediately displays an amber `Unsaved draft` badge, and the header displays the unsaved count.
+
+2. **Whitespace Normalization on Edits**:
+   - For an unchanged dish (e.g. `Paneer Tikka`), append trailing or leading spaces (`Paneer Tikka   `).
+   - Observe that the draft is **not** marked as modified (no unsaved badge, Save button remains disabled).
+   - Change a character (`Paneer Tikka Masala`); observe the unsaved badge appears and Save is enabled.
+   - When saved, leading/trailing whitespace is trimmed before persistence.
+
+3. **Save and Discard**:
+   - Edit a dish name and click **Discard**. The input reverts immediately to the original server value, clearing unsaved indicators.
+   - Edit a dish name and click **Save**. The Save button shows a spinner, disables duplicate clicks, updates the version badge from `v1` to `v2`, and clears the unsaved draft badge.
+
+4. **Persistence after Refresh and Backend Restart**:
+   - Click the **Refresh** button in the header; verify saved changes and bumped versions persist.
+   - Stop the backend process (`Ctrl+C`), start it again (`npm run dev`), and refresh the browser; verify all changes remain intact in MongoDB.
+
+5. **Idempotent Reseeding**:
+   - In the server directory, run `npm run seed`.
+   - Verify console logs report `Newly inserted dishes: 0` and `Preserved/skipped: 5`. Previously edited dishes retain their updated names and version numbers.
+
+6. **Publishing Validation (Empty Name & Non-HTTP URLs)**:
+   - Clear an unpublished dish name to whitespace-only (`   `) and toggle `isPublished` to true.
+   - Click Save. An error banner displays: `Publishing requires a non-empty trimmed dishName.` The draft remains intact.
+   - Using Postman or curl, attempt to publish a dish with an invalid image URL:
+     ```bash
+     curl -X PATCH http://localhost:5000/dishes/1 -H "Content-Type: application/json" -d "{\"expectedVersion\": 1, \"imageUrl\": \"ftp://invalid.com/pic.jpg\", \"isPublished\": true}"
+     ```
+     Observe a `400 Bad Request` rejection without corrupting database records.
+
+7. **Two-Tab Optimistic Concurrency Conflict Simulation**:
+   - Open `http://localhost:5173` in two separate browser windows (Tab A and Tab B).
+   - In Tab A, edit Dish 1 to `Rice Special` and click **Save**. Tab A advances Dish 1 to `v2`.
+   - In Tab B (still showing Dish 1 at `v1`), edit the name to `Rice Deluxe` and click **Save**.
+   - Tab B receives a `409 Conflict`. A prominent **Version Conflict Detected** banner appears showing the server's latest version (`v2`) and latest name (`Rice Special`).
+   - Tab B's draft (`Rice Deluxe`) is preserved. Click **Reload latest (discard draft)** to sync with Tab A's saved version, or click **Keep editing draft** to review.
+
+8. **Broken-Image Fallback**:
+   - If an image URL fails to load or is unreachable, the card renders an accessible `Image Unavailable` placeholder without breaking card dimensions or aspect ratios.
 
 ---
 
@@ -331,7 +397,7 @@ npm test
 ```
 *Executes against an isolated test database (`nosh_test_isolated_suite` or `nosh_test`). The main database (`nosh`), `production_test`, development, and all unapproved databases are rejected by a strict allowlist guard.*
 Coverage includes:
-- **Seed Logic**: Validating seed structure, required fields, image URLs, duplicate prevention, default versioning, and strict re-seed idempotency without overwriting user edits.
+- **Seed Logic**: Validating seed structure, required fields, HTTP/HTTPS image URLs, duplicate prevention, default versioning, and strict re-seed idempotency without overwriting user edits.
 - **Health Check**: Automated status verification.
 - **Database Safety Guard**: Strict allowlist validation, malformed URI handling, and drop protection.
 - **REST Endpoints**: `GET /dishes` and `PATCH /dishes/:dishId` with atomic version-controlled updates.
@@ -339,7 +405,7 @@ Coverage includes:
 - **Validation Safeguards**: Empty/whitespace names, invalid types, missing fields, invalid/non-HTTP URLs on publishing.
 - **Persistence & Immutability**: Persistence across separate Express application instances backed by the same MongoDB database, and database immutability verification on validation errors and 409 conflicts.
 
-#### Frontend Test Suite (16 tests):
+#### Frontend Test Suite (22 tests):
 ```bash
 cd client
 npm test
@@ -349,11 +415,13 @@ Coverage includes:
 - **UI States**: Initial loading skeleton, error banner with retry, empty catalog state, dish cards, and image fallback placeholder.
 - **Local Draft Isolation**: Kept locally in React state without firing network requests while typing or toggling.
 - **Discard Workflow**: Cleanly restores server-saved values.
+- **Whitespace Normalization**: Trailing and leading whitespace on unchanged names does not trigger dirty flags; genuine edits are trimmed before save.
 - **Successful Updates**: Sends expectedVersion and changes, increments badge to next version, removes unsaved indicators.
 - **Submission Guard**: Disables buttons and prevents duplicate submissions while requests are in flight.
 - **Optimistic Concurrency Control**: On 409 Conflict, preserves user draft, shows warning banner, and provides explicit reload latest option.
 - **Refresh Protection**: Detects server version bumps during refresh with dirty drafts and prevents saving until resolved.
 - **Multi-Session Concurrency**: Simulates two independent concurrent dashboard sessions mounted simultaneously on the same dish with container-scoped queries, verifying Session A's save advances shared server state to version 2, while Session B's version-1 save receives a 409 conflict, preserves Session B's draft, and allows explicit reload resolution.
+- **Responsive Layout**: Verifies responsive 1/2/3-column grid and 16:9 aspect-ratio cover styling.
 
 ---
 
