@@ -10,3 +10,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
 }
+
+.aspect-video {
+  aspect-ratio: 16 / 9;
+}

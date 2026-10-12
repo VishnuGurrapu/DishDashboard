@@ -40,9 +40,9 @@ export const ImageWithFallback = ({
   }
 
   return (
-    <div className={`relative overflow-hidden bg-slate-800 ${className}`}>
+    <div className={`relative overflow-hidden bg-slate-900 aspect-video w-full ${className}`}>
       {!isLoaded && (
-        <div className="absolute inset-0 bg-slate-800 animate-pulse flex items-center justify-center">
+        <div className="absolute inset-0 bg-slate-800 animate-pulse flex items-center justify-center z-0">
           <span className="text-xs text-slate-500">Loading...</span>
         </div>
       )}
@@ -52,7 +52,7 @@ export const ImageWithFallback = ({
         loading="lazy"
         onLoad={() => setIsLoaded(true)}
         onError={() => setHasError(true)}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-0 ${
           isLoaded ? 'opacity-100' : 'opacity-0'
         }`}
       />
