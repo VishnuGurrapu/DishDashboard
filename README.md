@@ -501,20 +501,25 @@ Available client scripts:
 6. The save will succeed if the database record was untouched. If another process modified the version while the server was down, a **Version Conflict** banner will appear; inspect the conflict values and click **Reload latest** when appropriate to synchronize.
 
 #### Procedure B: Invalid Stored Image URL Publishing Safeguard
-> **Warning**: This test modifies database records directly and should **only** be performed in a local development/test database (`mongodb://127.0.0.1:27017/nosh`).
+> **Warning**: This test modifies database records directly and should **only** be performed in an isolated local development/test database (`mongodb://127.0.0.1:27017/nosh`). Never execute this test against production or shared databases.
 
-1. **Back up the original record**:
+1. **Back up the complete original record**:
    Open a terminal and connect to MongoDB using `mongosh`:
    ```javascript
    use nosh;
-   // Back up Dish 5 original state
+   // Capture the complete original Dish 5 document into an in-memory variable
    const originalDish5 = db.dishes.findOne({ dishId: "5" });
    printjson(originalDish5);
    ```
-   *(From `dish-assignment.json`, Dish 5 has `dishName: "Alfredo Pasta"`, `imageUrl: "https://nosh-assignment.s3.ap-south-1.amazonaws.com/alfredo-pasta.jpg"`, `isPublished: true`, and initial `version: 1`)*.
+   > **Important Backup Note**: Keep this `mongosh` terminal session open throughout the test so that the in-memory `originalDish5` variable remains in scope for exact restoration in Step 5. If you close `mongosh` or switch sessions, write the document to a temporary backup collection first (`db.dishes_backup.insertOne(db.dishes.findOne({ dishId: "5" }))`) or record the full JSON output shown by `printjson`.
 
-2. **Simulate an invalid stored image URL**:
-   Set Dish 5 to an invalid non-HTTP URL and set `isPublished` to `false`:
+2. **Verify current version & simulate an invalid stored image URL**:
+   Inspect the document's current version:
+   ```javascript
+   const currentVersion = originalDish5.version;
+   print("Current version before test:", currentVersion);
+   ```
+   Set Dish 5 to an invalid non-HTTP URL protocol and set `isPublished` to `false` (leaving `version` unchanged):
    ```javascript
    db.dishes.updateOne(
      { dishId: "5" },
@@ -526,11 +531,16 @@ Available client scripts:
      }
    );
    ```
-   Verify the document currently in MongoDB has `version: 1` (or its current version) and `isPublished: false`.
+   Confirm the record in MongoDB has `isPublished: false` and note its exact current version:
+   ```javascript
+   const unpubDoc = db.dishes.findOne({ dishId: "5" });
+   print("Verified version in DB:", unpubDoc.version);
+   ```
 
 3. **Attempt to publish the dish via PATCH**:
-   Execute a PATCH request attempting to publish Dish 5 (`isPublished: true`), sending the required `dishName`, `isPublished`, and current `expectedVersion`:
+   Execute a PATCH request attempting to publish Dish 5 (`isPublished: true`), providing `dishName`, `isPublished: true`, and the exact verified `version` from Step 2 as `expectedVersion` (substitute `1` below with the actual version if your database record has already advanced):
    ```bash
+   # Use the exact version verified in Step 2 for expectedVersion (e.g. 1)
    curl -X PATCH http://localhost:5000/dishes/5 \
      -H "Content-Type: application/json" \
      -d '{
@@ -540,35 +550,33 @@ Available client scripts:
      }'
    ```
 
-4. **Verify failure & record immutability**:
-   - The API responds with `HTTP 400 Bad Request`:
+4. **Verify rejection & record immutability**:
+   - The API rejects the request with `HTTP 400 Bad Request`:
      ```json
      {
        "error": "Bad Request",
        "message": "Publishing requires a valid HTTP or HTTPS imageUrl."
      }
      ```
-   - Check MongoDB in `mongosh` to confirm the record was **not** updated:
+   - In `mongosh`, verify that the record was **not** updated:
      ```javascript
-     db.dishes.findOne({ dishId: "5" });
+     const checkDoc = db.dishes.findOne({ dishId: "5" });
+     print("isPublished:", checkDoc.isPublished); // Must still be false
+     print("version:", checkDoc.version);         // Must remain unchanged
      ```
-     `isPublished` remains `false` and `version` remains `1`.
 
-5. **Safely restore the original record**:
-   Restore Dish 5 to its verified original data from `dish-assignment.json`:
+5. **Safely restore the exact original record**:
+   Restore the complete backed-up document from Step 1, preserving its exact original `version`, `imageUrl`, and metadata:
    ```javascript
-   db.dishes.updateOne(
-     { dishId: "5" },
-     {
-       $set: {
-         dishName: "Alfredo Pasta",
-         imageUrl: "https://nosh-assignment.s3.ap-south-1.amazonaws.com/alfredo-pasta.jpg",
-         isPublished: true,
-         version: 1
-       }
-     }
-   );
+   // Restore the complete original document from the in-memory backup
+   db.dishes.replaceOne({ dishId: "5" }, originalDish5);
+
+   // Verify full restoration
+   printjson(db.dishes.findOne({ dishId: "5" }));
    ```
+   *(If your `mongosh` session was closed, restore using the temporary collection `db.dishes.replaceOne({ dishId: "5" }, db.dishes_backup.findOne({ dishId: "5" }))`, or update fields using the printed backup JSON values matching the document's original version rather than assuming `version: 1`)*.
+
+   *Safety Note*: Because the original document and version are restored verbatim, this test is safe to repeat without drifting versions or leaving corrupted image URLs in the database.
 
 #### Procedure C: Two-Tab Optimistic Concurrency Conflict Simulation
 1. Open `http://localhost:5173` in two side-by-side browser tabs (Tab A and Tab B).
@@ -638,7 +646,7 @@ Test coverage across 1 test suite (`src/App.test.tsx`):
 
 ---
 
-### Time Spent & AI Assistance Disclosure
+### Time Spent, Scaffolding & AI Assistance Disclosure
 
 - **Total Time Spent**: Approximately 4.5 hours across development phases:
   - *Phase 1 (Foundation & Setup)*: ~35 mins
@@ -646,13 +654,16 @@ Test coverage across 1 test suite (`src/App.test.tsx`):
   - *Phase 3 (Version-Controlled REST API & OCC)*: ~60 mins
   - *Phase 4 (React Dashboard, Draft State & Conflict UX)*: ~90 mins
   - *Phase 5 (Testing, Edge Cases & Verification)*: ~40 mins
+- **Scaffolding & Starter Template**:
+  - The client project was scaffolded using Vite's standard React + TypeScript template (`create-vite`). Unused default template files (`App.css`, sample SVGs, and boilerplate README) were subsequently audited and removed during repository cleanup.
+  - The backend server was established as an Express + TypeScript service using standard `npm init` and TypeScript configuration.
+- **External Application Code**:
+  - None. No third-party application code, component libraries, or copied snippet repositories were used outside of standard open-source dependencies declared in `package.json` (React, Vite, Tailwind CSS, Express, Mongoose, Zod, and Vitest).
 - **Work Completed by Author**:
   - Architecture and domain model design (Dish schema, version tracking, idempotency guarantees).
   - Formulation of atomic optimistic concurrency control strategy using MongoDB `findOneAndUpdate`.
-  - Component hierarchy, Tailwind layout styling, and draft state isolation logic.
+  - Component hierarchy, Tailwind layout styling, draft state isolation logic, and non-blocking error recovery.
   - Review, test execution, and verification of all review fixes and invariants.
 - **AI Assistance Used**:
-  - Google DeepMind Antigravity IDE (Gemini agent) was utilized as an AI pair-programming assistant for boilerplate scaffolding, test authoring, code review issue identification, and documentation refinement.
+  - Google DeepMind Antigravity IDE (Gemini agent) was utilized as an AI pair-programming assistant for boilerplate scaffolding, test authoring, code review issue identification, React hook lint remediation, and documentation refinement.
   - All architecture decisions, atomic update mechanics, strict database guards, and React draft management patterns were reviewed and validated against assignment specifications.
-- **External Code Copied**:
-  - None. No third-party templates, code generators, or copied snippet libraries were used outside of standard open-source npm dependencies listed in `package.json`.

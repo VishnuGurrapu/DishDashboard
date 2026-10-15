@@ -198,7 +198,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500 bg-slate-950/60">
-        Nosh Full Stack Intern Assignment &bull; Dish Dashboard &bull; Phase 4
+        Nosh Full Stack Intern Assignment &bull; Dish Dashboard
       </footer>
     </div>
   )
