@@ -164,7 +164,7 @@ npm run seed
 
 ---
 
-### API Documentation (Phase 3)
+### API Documentation
 
 Base URL: `http://localhost:5000`
 
@@ -288,7 +288,7 @@ Returned when the requested `dishId` does not exist in the database:
 
 ---
 
-### Dashboard Features (Phase 4)
+### Dashboard Features
 
 1. **Responsive Dish Catalog**:
    - Renders dishes with responsive grid layout (mobile, tablet, desktop).
