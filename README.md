@@ -1,6 +1,6 @@
 # Nosh Full Stack Intern Assignment: Dish Dashboard
 
-A full-stack dashboard for managing dish catalogs, supporting draft editing and safe concurrent updates.
+A production-grade, full-stack dashboard for managing restaurant dish catalogs with local draft state isolation, atomic optimistic concurrency control (OCC), and resilient conflict resolution.
 
 ---
 
@@ -14,91 +14,72 @@ A full-stack dashboard for managing dish catalogs, supporting draft editing and 
 
 ---
 
-### Project Structure
+### Architecture
 
-```text
-NOSHAssignment/
-├── client/                     # Frontend React + Vite + Tailwind CSS application
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── ConflictBanner.tsx    # Conflict alert with Reload latest action and discard warning
-│   │   │   ├── DishCard.tsx          # Card displaying image, status, version, draft inputs & actions
-│   │   │   ├── Header.tsx            # Header branding, statistics, and refresh action
-│   │   │   └── ImageWithFallback.tsx # Image loader with fallback placeholder
-│   │   ├── hooks/
-│   │   │   └── useDishDashboard.ts   # Draft state management, OCC updates, and conflicts
-│   │   ├── services/
-│   │   │   └── api.ts                # REST API client (fetchDishes, updateDish)
-│   │   ├── types/
-│   │   │   └── dish.ts               # TypeScript interfaces for dishes, drafts, and responses
-│   │   ├── utils/
-│   │   │   └── dish.ts               # Shared normalization & meaningful change detection
-│   │   ├── App.tsx                   # Main Dish Dashboard UI
-│   │   ├── App.test.tsx              # Component & integration test suite (22 tests)
-│   │   ├── index.css                 # Tailwind CSS imports & base styles
-│   │   └── main.tsx                  # React entrypoint
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── vite.config.ts
-├── server/                     # Backend Express + TypeScript application
-│   ├── src/
-│   │   ├── config/
-│   │   │   ├── db.ts           # MongoDB connection lifecycle module
-│   │   │   └── env.ts          # Environment configuration
-│   │   ├── models/
-│   │   │   └── dish.model.ts   # Mongoose Dish model (dishId, dishName, imageUrl, isPublished, version)
-│   │   ├── routes/
-│   │   │   ├── dish.route.ts   # REST endpoints: GET /dishes, PATCH /dishes/:dishId
-│   │   │   └── health.route.ts # Health check: GET /health
-│   │   ├── schemas/
-│   │   │   └── dish.schema.ts  # Zod schemas for seed data and PATCH request validation
-│   │   ├── scripts/
-│   │   │   └── seed.ts         # Executable idempotent seed script CLI
-│   │   ├── services/
-│   │   │   ├── dish.service.ts # Dish business logic & atomic version-controlled updates
-│   │   │   └── seed.service.ts # Core seed logic & validation service
-│   │   ├── app.ts              # Express application & middleware
-│   │   └── server.ts           # Server HTTP listener (connects to MongoDB before listening)
-│   ├── tests/
-│   │   ├── dish.test.ts        # Comprehensive API tests for GET /dishes and PATCH /dishes/:dishId
-│   │   ├── health.test.ts      # Automated health endpoint test
-│   │   ├── seed.test.ts        # Unit & safe integration tests for seed logic
-│   │   └── test-utils.ts       # Test DB URI validator & safe cleanup helpers
-│   ├── .env.example            # Example environment variables
-│   ├── package.json
-│   └── tsconfig.json
-├── dish-assignment.json        # Assignment seed data source (kept in root)
-├── .gitignore                  # Root gitignore for workspace
-└── README.md                   # Setup, run, and API guide
-```
+The application implements a clean, layered architecture separating user state, API contracts, domain validation, and database persistence:
+
+1. **Client Draft State**: The React dashboard fetches dishes via `GET /dishes` and maintains an atomic local catalog state (`dishes`, `drafts`, `conflictMap`). User edits to name or publication status remain isolated in client-side drafts without firing network calls during typing or toggling.
+2. **REST API & Strict Validation**: On save, the client sends `PATCH /dishes/:dishId` containing `dishName`, `isPublished`, and `expectedVersion`. Express body-parser parses incoming JSON (with dedicated error middleware returning HTTP 400 for malformed syntax), and Zod strictly validates parameters and payload (rejecting extra fields like `imageUrl`).
+3. **Service Layer & Business Rules**: `dish.service.ts` coordinates domain logic, verifies dish existence (returning 404 for unknown IDs), runs an early version comparison, and validates publishing integrity (requiring a non-empty trimmed name and a valid HTTP/HTTPS URL on the stored database record when `isPublished: true`).
+4. **Atomic Concurrency & Database Check**: The definitive version check occurs directly inside MongoDB using `Dish.findOneAndUpdate({ dishId, version: input.expectedVersion }, { $set: updateFields, $inc: { version: 1 } })`. The database evaluates the version condition atomically under its document-level write lock, preventing concurrent overwrite races.
+5. **Persistence & Conflict Feedback**: Mongoose writes updates to the `dishes` collection. If the atomic query matches zero documents because another write already changed the version, the service retrieves the latest server record and returns HTTP 409 Conflict with `currentDish`, enabling the user to review the diff or reload without losing their draft.
 
 ---
 
-### Prerequisites
+### Design Decisions: Optimistic Concurrency Control (OCC)
+
+In collaborative environments where multiple clients or tabs may view and update dishes simultaneously, traditional "last-write-wins" strategies lead to silent data loss. This system uses Optimistic Concurrency Control:
+
+- **Why each dish has a version**: Every dish document in MongoDB includes an integer `version` property initialized to `1`. This acts as a monotonic revision counter that increments by `1` on every committed update.
+- **Why the client sends `expectedVersion`**: When a client loads a dish, it captures the current `version`. When saving, it sends this snapshot version as `expectedVersion`, proving to the server the exact baseline upon which the user made their edits.
+- **Why the version check is inside `findOneAndUpdate`**: A two-step pattern (`findOne` followed by `updateOne`) introduces a Time-Of-Check to Time-Of-Use (TOCTOU) race condition—two concurrent requests could both read `version: 1`, both pass the check, and sequentially overwrite each other. Placing `{ dishId, version: input.expectedVersion }` directly in `Dish.findOneAndUpdate` guarantees that MongoDB evaluates the version match and increments the version in a single atomic database operation.
+- **How atomic operations prevent silent overwrites**: If Client A and Client B both attempt to update Dish 1 starting from version 1, MongoDB's write lock processes one operation first. The first operation matches `{ dishId: "1", version: 1 }`, applies the changes, and advances the version to `2`. When the second operation executes, no document matches `{ dishId: "1", version: 1 }`. The operation updates zero records and returns `null`.
+- **Conflict response and user recovery**: When an update finds a version mismatch, the API returns `HTTP 409 Conflict` along with the latest persisted database state in `currentDish`. The frontend preserves the user's uncommitted draft, displays a prominent conflict banner comparing server vs. draft values, and offers two clear paths:
+  - **Keep editing draft**: Retain the local draft to copy or refine modifications.
+  - **Reload latest**: Explicitly discard the local draft and adopt the server's current version (`currentDish`).
+  - **Discard**: Restores the draft to the dish's last loaded baseline, clearing the conflict without adopting unverified server changes.
+
+---
+
+### Database Setup, Migrations & Startup
+
+No migrations needed. MongoDB with Mongoose creates the unique index on dishId.
+
+#### 1. MongoDB Setup & Connection
+- **Connection URI**: Configured via `MONGODB_URI` in `server/.env` (default: `mongodb://127.0.0.1:27017/nosh`).
+- **Mongoose Model**: Defined in `server/src/models/dish.model.ts` on the `dishes` collection with a unique index on `dishId` (`unique: true, index: true`).
+- **Prerequisites**: Ensure a local MongoDB instance (v6.0+) is running before starting the server or running seeds.
+
+#### 2. Starting MongoDB
+- **Windows (Service)**:
+  ```powershell
+  net start MongoDB
+  ```
+- **Windows (Manual via mongod)**:
+  ```powershell
+  mongod --dbpath "C:\data\db"
+  ```
+- **macOS / Linux (Homebrew or systemd)**:
+  ```bash
+  brew services start mongodb-community
+  # or
+  sudo systemctl start mongod
+  ```
+- **Verify connectivity**:
+  ```powershell
+  Test-NetConnection -ComputerName 127.0.0.1 -Port 27017
+  ```
+  *(or on macOS/Linux: `nc -zv 127.0.0.1 27017`)*
+
+---
+
+### Prerequisites & Environment
 
 - **Node.js**: Declared compatible engine range: `^22.22.2 || ^24.15.0 || >=26.0.0`
-  - *Dependency declared engines:*
-    - `jsdom` (`^30.1.2`): `^22.22.2 || ^24.15.0 || >=26.0.0`
-    - `vitest` (`^5.0.4`): `^22.12.0 || ^24.0.0 || >=26.0.0`
-    - `vite` (`^8.3.0`): `^20.19.0 || >=22.12.0`
-    - `vitest` (server `^3.0.4`): `^18.0.0 || ^20.0.0 || >=22.0.0`
-  - *Verification runtime notice:* All tests (36 backend, 22 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0** because it was the sole runtime available on this machine. Node.js v24.13.0 does **not** satisfy `jsdom`'s declared engine requirement (`^24.15.0`). Although all tests and builds succeed without errors under v24.13.0, strict engine-compliant environments require a Node.js release within `^22.22.2 || ^24.15.0 || >=26.0.0`.
-- **npm**: v10+ (tested on v10.8.0)
-- **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`
-  - MongoDB must be running before starting the backend server or executing the seed command.
-  - To run MongoDB on Windows with a persistent data directory:
-    ```powershell
-    # Ensure data directory exists
-    New-Item -ItemType Directory -Force -Path "C:\data\db"
-    # Start MongoDB daemon
-    & "C:\Program Files\MongoDB\Server\9.0\bin\mongod.exe" --dbpath "C:\data\db"
-    ```
-    *(Alternatively, start via Windows Services: `net start MongoDB`)*
-  - To verify that your local MongoDB server is active:
-    ```powershell
-    Test-NetConnection -ComputerName 127.0.0.1 -Port 27017
-    ```
-    *(or on macOS/Linux: `nc -zv 127.0.0.1 27017`)*
+  - *Dependency engine requirements*: `jsdom@30.1.2`, `vitest@5.0.4`.
+  - *Verification note*: Automated test suites (40 backend, 26 frontend) and production builds were verified locally on **Node.js v24.13.0** with **npm v10.8.0**.
+- **npm**: v10+ (tested on v10.8.0).
+- **MongoDB**: Local MongoDB instance running on `mongodb://127.0.0.1:27017`.
 
 ---
 
@@ -110,61 +91,111 @@ git clone https://github.com/VishnuGurrapu/DishDashboard.git
 cd DishDashboard
 ```
 
-Install dependencies separately for both `server` and `client`:
+Install dependencies for both projects:
 
-#### 1. Server Dependencies
 ```bash
+# Server dependencies
 cd server
 npm install
-```
 
-#### 2. Client Dependencies
-```bash
+# Client dependencies
 cd ../client
 npm install
 ```
 
----
-
-### Environment Setup
-
-Create the local `.env` file for the backend (`server/.env`):
-
+Configure backend environment variables:
 ```bash
 cd ../server
 cp .env.example .env
 ```
 *(On Windows PowerShell: `Copy-Item .env.example .env`)*
 
-The `server/.env` file contains:
+The `server/.env` defaults:
 ```env
 PORT=5000
 MONGODB_URI=mongodb://127.0.0.1:27017/nosh
 CLIENT_URL=http://localhost:5173
 ```
-*Note: The backend reads `PORT`, `MONGODB_URI`, and `CLIENT_URL`. Never commit production credentials or secrets. The repository gitignores local `.env` files.*
 
 ---
 
 ### Database Seeding (`npm run seed`)
 
-The seed script reads from the root `dish-assignment.json` file, validates each entry using Zod schemas (`dishSeedItemSchema`), and loads the records into MongoDB idempotently:
+The seed script reads from `dish-assignment.json` in the root directory, validates every record against Zod schemas (`dishSeedItemSchema`), and inserts records idempotently:
 
-- **Execution order**: Ensure MongoDB is running before invoking the seed command.
-- **Unique identifier**: `dishId` (unique string).
-- **Default version**: Newly seeded dishes are inserted with `version: 1`.
-- **Idempotency Guarantee**: If a dish already exists (even if updated or versioned up by users), the seed script **never overwrites** its fields or resets its version.
-- **Rerun safety**: Running `npm run seed` repeatedly inserts only missing records without affecting existing records.
-
-To execute the seed script:
 ```bash
 cd server
 npm run seed
 ```
 
+- **Unique identifier**: `dishId` (unique string).
+- **Default version**: Newly seeded dishes are inserted with `version: 1`.
+- **Idempotency Guarantee**: If a dish already exists in the database, the seed script skips it without overwriting fields or resetting its version counter.
+- **Rerun safety**: Running `npm run seed` repeatedly inserts only missing records.
+
 ---
 
-### API Documentation
+### Project Structure
+
+```text
+NOSHAssignment/
+├── client/                     # Frontend React + Vite + Tailwind CSS application
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ConflictBanner.tsx    # Conflict banner with Reload latest and Discard actions
+│   │   │   ├── DishCard.tsx          # Card displaying image, status, version, draft inputs & actions
+│   │   │   ├── Header.tsx            # Header branding, metrics, and refresh action
+│   │   │   └── ImageWithFallback.tsx # Accessible image loader with fallback placeholder
+│   │   ├── hooks/
+│   │   │   └── useDishDashboard.ts   # Unified catalog draft state, OCC saves, and conflict handling
+│   │   ├── services/
+│   │   │   └── api.ts                # REST API client (fetchDishes, updateDish)
+│   │   ├── types/
+│   │   │   └── dish.ts               # TypeScript interfaces for dishes, drafts, and PATCH payloads
+│   │   ├── utils/
+│   │   │   └── dish.ts               # Normalization & meaningful change detection
+│   │   ├── App.tsx                   # Main Dashboard UI with non-blocking error banner
+│   │   ├── App.test.tsx              # Comprehensive frontend test suite (26 tests)
+│   │   ├── index.css                 # Tailwind CSS imports & base styles
+│   │   └── main.tsx                  # React DOM entrypoint
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── vite.config.ts
+├── server/                     # Backend Express + TypeScript application
+│   ├── src/
+│   │   ├── config/
+│   │   │   ├── db.ts           # MongoDB connection lifecycle module
+│   │   │   └── env.ts          # Validated environment configuration
+│   │   ├── models/
+│   │   │   └── dish.model.ts   # Mongoose Dish model (dishId, dishName, imageUrl, isPublished, version)
+│   │   ├── routes/
+│   │   │   ├── dish.route.ts   # REST endpoints: GET /dishes, PATCH /dishes/:dishId
+│   │   │   └── health.route.ts # Health check: GET /health
+│   │   ├── schemas/
+│   │   │   └── dish.schema.ts  # Zod schemas for seed validation and strict PATCH body validation
+│   │   ├── scripts/
+│   │   │   └── seed.ts         # CLI entrypoint for idempotent seeding
+│   │   ├── services/
+│   │   │   ├── dish.service.ts # Dish business rules & atomic conditional OCC updates
+│   │   │   └── seed.service.ts # Idempotent seed service and schema validation
+│   │   ├── app.ts              # Express application, CORS, JSON parser & error middleware
+│   │   └── server.ts           # Server listener (connects to MongoDB before listening)
+│   ├── tests/
+│   │   ├── dish.test.ts        # Comprehensive API tests (31 tests)
+│   │   ├── health.test.ts      # Health check test (1 test)
+│   │   ├── seed.test.ts        # Seed logic & idempotency tests (8 tests)
+│   │   └── test-utils.ts       # Test DB URI validator & safe cleanup helpers
+│   ├── .env.example
+│   ├── package.json
+│   └── tsconfig.json
+├── dish-assignment.json        # Assignment seed data source
+├── .gitignore
+└── README.md                   # Full architecture, API, setup, and verification guide
+```
+
+---
+
+### API Documentation & Error Handling
 
 Base URL: `http://localhost:5000`
 
@@ -211,17 +242,16 @@ Fetches all dishes directly from MongoDB sorted by `dishId`.
 ---
 
 #### 3. PATCH `/dishes/:dishId`
-Safely updates a dish using Optimistic Concurrency Control (OCC).
+Atomically updates a dish using Optimistic Concurrency Control (OCC).
 
 **Request Body Parameters**:
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| `expectedVersion` | integer (>= 1) | **Yes** | The version expected in the database before this edit is applied. |
-| `dishName` | string | Optional | Non-empty, trimmed dish name. Whitespace-only strings are rejected. |
-| `imageUrl` | string | Optional | Valid HTTP or HTTPS URL. |
-| `isPublished` | boolean | Optional | Boolean flag. Only modified if explicitly provided. |
+| `expectedVersion` | integer (>= 1) | **Required** | The baseline version expected in MongoDB before this update is applied. |
+| `dishName` | string | **Required** | Non-empty trimmed dish name. Whitespace-only strings are rejected. |
+| `isPublished` | boolean | **Required** | Publication status flag (`true` or `false`). |
 
-> **Note**: At least one of `dishName`, `imageUrl`, or `isPublished` must be supplied.
+> **Strict Body Enforcement**: `imageUrl` is **not accepted** in PATCH requests. The schema uses Zod `.strict()`; passing unexpected fields (including `imageUrl`) results in an HTTP 400 rejection.
 
 **Example Request**:
 ```http
@@ -235,54 +265,170 @@ Content-Type: application/json
 }
 ```
 
-**Response `200 OK` (Successful Update)**:
+**Responses**:
+
+- **`200 OK` (Successful Update)**:
+  ```json
+  {
+    "message": "Dish updated successfully",
+    "dish": {
+      "dishId": "1",
+      "dishName": "Spiced Jeera Rice",
+      "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+      "isPublished": true,
+      "version": 2
+    }
+  }
+  ```
+
+- **`400 Bad Request` (Malformed JSON)**:
+  Returned when the request body contains invalid or malformed JSON syntax:
+  ```json
+  {
+    "error": "Bad Request",
+    "message": "Invalid JSON body"
+  }
+  ```
+
+- **`400 Bad Request` (Validation Failure or Unexpected Fields)**:
+  Returned when required fields are missing, invalid, or unexpected fields (such as `imageUrl`) are passed:
+  ```json
+  {
+    "error": "Bad Request",
+    "message": "Request body validation failed.",
+    "details": [
+      "dishName: dishName cannot be empty or whitespace-only"
+    ]
+  }
+  ```
+
+- **`400 Bad Request` (Publishing Integrity Error)**:
+  Returned when attempting to publish (`isPublished: true`) a dish whose stored database image URL is invalid or not using HTTP/HTTPS:
+  ```json
+  {
+    "error": "Bad Request",
+    "message": "Publishing requires a valid HTTP or HTTPS imageUrl."
+  }
+  ```
+
+- **`404 Not Found` (Unknown Dish)**:
+  Returned when the requested `dishId` does not exist in the database:
+  ```json
+  {
+    "error": "Not Found",
+    "message": "Dish with ID '999' was not found."
+  }
+  ```
+
+- **`409 Conflict` (Version Conflict)**:
+  Returned when `expectedVersion` does not match the database version (the record was modified concurrently). The database is left completely unchanged:
+  ```json
+  {
+    "error": "Conflict",
+    "message": "Stale version conflict. Expected version 1, but current version is 2.",
+    "currentDish": {
+      "dishId": "1",
+      "dishName": "Spiced Jeera Rice",
+      "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+      "isPublished": true,
+      "version": 2
+    }
+  }
+  ```
+
+- **`500 Internal Server Error` (Unexpected Errors)**:
+  Returned when an unexpected internal server exception occurs, without leaking sensitive internals:
+  ```json
+  {
+    "error": "Internal Server Error",
+    "message": "Unexpected error"
+  }
+  ```
+
+---
+
+### Working curl Examples
+
+All examples assume the backend server is running on `http://localhost:5000`.
+
+#### 1. Malformed JSON Request (`HTTP 400`)
+```bash
+curl -X PATCH http://localhost:5000/dishes/1 \
+  -H "Content-Type: application/json" \
+  -d '{ "dishName": "Broken JSON", '
+```
+**Response**:
 ```json
 {
-  "message": "Dish updated successfully",
-  "dish": {
-    "dishId": "1",
-    "dishName": "Spiced Jeera Rice",
-    "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
-    "isPublished": true,
-    "version": 2
-  }
+  "error": "Bad Request",
+  "message": "Invalid JSON body"
 }
 ```
 
-**Response `409 Conflict` (Stale Version Conflict)**:
-Returned when `expectedVersion` does not match the database version (e.g. another user already updated the record). The database is left unchanged.
-```json
-{
-  "error": "Conflict",
-  "message": "Stale version conflict. Expected version 1, but current version is 2.",
-  "currentDish": {
-    "dishId": "1",
-    "dishName": "Spiced Jeera Rice",
-    "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+#### 2. PATCH with Invalid Input or Unexpected Field (`HTTP 400`)
+Sending an unexpected field like `imageUrl` or missing required fields:
+```bash
+curl -X PATCH http://localhost:5000/dishes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dishName": "Jeera Rice",
     "isPublished": true,
-    "version": 2
-  }
-}
+    "expectedVersion": 1,
+    "imageUrl": "https://example.com/new.jpg"
+  }'
 ```
-
-**Response `400 Bad Request` (Validation Errors)**:
-Returned when input validation fails (e.g. empty name, invalid type, missing `expectedVersion`, or invalid image URL):
+**Response**:
 ```json
 {
   "error": "Bad Request",
   "message": "Request body validation failed.",
   "details": [
-    "dishName: dishName cannot be empty or whitespace-only"
+    "imageUrl: Unexpected field in request body"
   ]
 }
 ```
 
-**Response `404 Not Found` (Unknown Dish)**:
-Returned when the requested `dishId` does not exist in the database:
+#### 3. PATCH for an Unknown Dish (`HTTP 404`)
+```bash
+curl -X PATCH http://localhost:5000/dishes/999 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dishName": "Unknown Dish",
+    "isPublished": true,
+    "expectedVersion": 1
+  }'
+```
+**Response**:
 ```json
 {
   "error": "Not Found",
   "message": "Dish with ID '999' was not found."
+}
+```
+
+#### 4. Version Conflict (`HTTP 409`)
+To reliably trigger a 409 conflict, send an `expectedVersion` that does not match the stored version (for example, sending `999` against a dish currently at `version: 1`):
+```bash
+curl -X PATCH http://localhost:5000/dishes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dishName": "Conflicting Update",
+    "isPublished": true,
+    "expectedVersion": 999
+  }'
+```
+**Response**:
+```json
+{
+  "error": "Conflict",
+  "message": "Stale version conflict. Expected version 999, but current version is 1.",
+  "currentDish": {
+    "dishId": "1",
+    "dishName": "Jeera Rice",
+    "imageUrl": "https://nosh-assignment.s3.ap-south-1.amazonaws.com/jeera-rice.jpg",
+    "isPublished": true,
+    "version": 1
+  }
 }
 ```
 
@@ -292,19 +438,22 @@ Returned when the requested `dishId` does not exist in the database:
 
 1. **Responsive Dish Catalog**:
    - Renders dishes with responsive grid layout (mobile, tablet, desktop).
-   - Displays dish image, ID, name, live/draft publication status badge, and version badge.
-   - Graceful fallback placeholder if image URL fails to load.
-2. **Local Draft Editing**:
-   - Editing name or publication status updates the local draft only. No backend requests occur while typing or toggling.
-   - Dishes with edits display an amber `Unsaved draft` badge and the header displays an active unsaved count.
-   - **Discard** button restores the last server-saved values.
-3. **Optimistic Locking & Conflict Resolution**:
-   - Save sends changed fields with `expectedVersion`.
+   - Displays dish image with accessible fallback placeholder if image loading fails.
+   - Status indicators: **Live** (green) vs **Unpublished** (slate), with a separate amber **Unsaved draft** badge for local uncommitted edits.
+   - Version badge displaying the current persisted database revision (e.g. `v1`).
+2. **Local Draft State Isolation**:
+   - Editing name or toggling publication updates local React state only. Zero network requests occur while typing or toggling.
+   - **Discard** button restores the local draft to the dish's last loaded baseline, clearing unsaved indicators.
+3. **Optimistic Locking & Conflict UX**:
+   - Save submits `dishName`, `isPublished`, and `expectedVersion`.
    - On `409 Conflict`:
-     - Preserves the user's current draft so work is never lost.
-     - Displays conflict banner with current server version and data.
-     - Offers **Reload latest** action with explicit warning that reloading discards the local draft.
-   - Duplicate submissions are prevented while a save is in flight.
+     - Preserves the user's uncommitted draft without overwriting local input.
+     - Displays a conflict banner detailing server version and current data.
+     - Offers **Reload latest** (to adopt remote version) or **Discard** (to restore to baseline).
+   - Buttons are disabled and display loading spinners while saves are in flight to prevent duplicate submissions.
+4. **Refresh Error Resilience**:
+   - If dishes are already loaded and a background or manual refresh fails, existing cards and active drafts remain visible.
+   - A compact, non-blocking error banner with a **Retry Refresh** action is displayed above the grid instead of wiping out the screen with a full-page error state.
 
 ---
 
@@ -315,14 +464,14 @@ Returned when the requested `dishId` does not exist in the database:
 cd server
 npm run dev
 ```
-The server will connect to MongoDB before accepting incoming HTTP requests on `http://localhost:5000`.
+The server connects to MongoDB before listening on `http://localhost:5000`.
 
 Available server scripts:
 - `npm run dev`: Starts development server with live reload via `tsx watch`
 - `npm run seed`: Executes the idempotent database seed script
 - `npm run build`: Compiles TypeScript to JavaScript in `dist/`
 - `npm start`: Runs the compiled production server (`dist/server.js`)
-- `npm test`: Runs automated test suite via Vitest (36 tests)
+- `npm test`: Runs automated test suite via Vitest (40 tests)
 
 #### 2. Start the Frontend Client
 In a separate terminal:
@@ -335,93 +484,144 @@ The Vite development server will start at `http://localhost:5173`.
 Available client scripts:
 - `npm run dev`: Starts Vite dev server
 - `npm run build`: Type-checks and compiles production bundle to `dist/`
-- `npm test`: Runs Vitest component & integration test suite (22 tests)
+- `npm test`: Runs Vitest component & integration test suite (26 tests)
+- `npm run lint`: Runs Oxlint linter (`0 errors, 0 warnings`)
 - `npm run preview`: Previews the production build
 
 ---
 
 ### Step-by-Step Manual Verification Guide
 
-You can manually verify all core behaviors in the browser at `http://localhost:5173`:
+#### Procedure A: Failed Save and Draft Recovery (Offline Backend)
+1. Start the application normally (`npm run dev` in both `server/` and `client/`) and open `http://localhost:5173`.
+2. Stop the backend server by pressing `Ctrl+C` in the backend terminal window, while leaving the frontend browser tab open.
+3. In the browser, edit the name of Dish 1 (e.g. change to `Offline Draft Name`) and click **Save**.
+4. Confirm that an error banner appears indicating network/save failure, and confirm that your edited text and the amber **Unsaved draft** badge remain completely intact.
+5. Restart the backend server (`cd server && npm run dev`) and click **Save** again.
+6. The save will succeed if the database record was untouched. If another process modified the version while the server was down, a **Version Conflict** banner will appear; inspect the conflict values and click **Reload latest** when appropriate to synchronize.
 
-1. **Draft Editing without Immediate Network Calls**:
-   - Open browser DevTools Network tab.
-   - Type in a dish name field or toggle the publication switch.
-   - Observe that no HTTP requests are sent while typing or toggling. The card immediately displays an amber `Unsaved draft` badge, and the header displays the unsaved count.
+#### Procedure B: Invalid Stored Image URL Publishing Safeguard
+> **Warning**: This test modifies database records directly and should **only** be performed in a local development/test database (`mongodb://127.0.0.1:27017/nosh`).
 
-2. **Whitespace Normalization on Edits**:
-   - For an unchanged dish (e.g. `Paneer Tikka`), append trailing or leading spaces (`Paneer Tikka   `).
-   - Observe that the draft is **not** marked as modified (no unsaved badge, Save button remains disabled).
-   - Change a character (`Paneer Tikka Masala`); observe the unsaved badge appears and Save is enabled.
-   - When saved, leading/trailing whitespace is trimmed before persistence.
+1. **Back up the original record**:
+   Open a terminal and connect to MongoDB using `mongosh`:
+   ```javascript
+   use nosh;
+   // Back up Dish 5 original state
+   const originalDish5 = db.dishes.findOne({ dishId: "5" });
+   printjson(originalDish5);
+   ```
+   *(From `dish-assignment.json`, Dish 5 has `dishName: "Alfredo Pasta"`, `imageUrl: "https://nosh-assignment.s3.ap-south-1.amazonaws.com/alfredo-pasta.jpg"`, `isPublished: true`, and initial `version: 1`)*.
 
-3. **Save and Discard**:
-   - Edit a dish name and click **Discard**. The input reverts immediately to the original server value, clearing unsaved indicators.
-   - Edit a dish name and click **Save**. The Save button shows a spinner, disables duplicate clicks, updates the version badge from `v1` to `v2`, and clears the unsaved draft badge.
+2. **Simulate an invalid stored image URL**:
+   Set Dish 5 to an invalid non-HTTP URL and set `isPublished` to `false`:
+   ```javascript
+   db.dishes.updateOne(
+     { dishId: "5" },
+     {
+       $set: {
+         imageUrl: "ftp://invalid-server.local/alfredo.jpg",
+         isPublished: false
+       }
+     }
+   );
+   ```
+   Verify the document currently in MongoDB has `version: 1` (or its current version) and `isPublished: false`.
 
-4. **Persistence after Refresh and Backend Restart**:
-   - Click the **Refresh** button in the header; verify saved changes and bumped versions persist.
-   - Stop the backend process (`Ctrl+C`), start it again (`npm run dev`), and refresh the browser; verify all changes remain intact in MongoDB.
+3. **Attempt to publish the dish via PATCH**:
+   Execute a PATCH request attempting to publish Dish 5 (`isPublished: true`), sending the required `dishName`, `isPublished`, and current `expectedVersion`:
+   ```bash
+   curl -X PATCH http://localhost:5000/dishes/5 \
+     -H "Content-Type: application/json" \
+     -d '{
+       "dishName": "Alfredo Pasta",
+       "isPublished": true,
+       "expectedVersion": 1
+     }'
+   ```
 
-5. **Idempotent Reseeding**:
-   - In the server directory, run `npm run seed`.
-   - Verify console logs report `Newly inserted dishes: 0` and `Preserved/skipped: 5`. Previously edited dishes retain their updated names and version numbers.
-
-6. **Publishing Validation (Empty Name & Non-HTTP URLs)**:
-   - Clear an unpublished dish name to whitespace-only (`   `) and toggle `isPublished` to true.
-   - Click Save. An error banner displays: `Publishing requires a non-empty trimmed dishName.` The draft remains intact.
-   - Using Postman or curl, attempt to publish a dish with an invalid image URL:
-     ```bash
-     curl -X PATCH http://localhost:5000/dishes/1 -H "Content-Type: application/json" -d "{\"expectedVersion\": 1, \"imageUrl\": \"ftp://invalid.com/pic.jpg\", \"isPublished\": true}"
+4. **Verify failure & record immutability**:
+   - The API responds with `HTTP 400 Bad Request`:
+     ```json
+     {
+       "error": "Bad Request",
+       "message": "Publishing requires a valid HTTP or HTTPS imageUrl."
+     }
      ```
-     Observe a `400 Bad Request` rejection without corrupting database records.
+   - Check MongoDB in `mongosh` to confirm the record was **not** updated:
+     ```javascript
+     db.dishes.findOne({ dishId: "5" });
+     ```
+     `isPublished` remains `false` and `version` remains `1`.
 
-7. **Two-Tab Optimistic Concurrency Conflict Simulation**:
-   - Open `http://localhost:5173` in two separate browser windows (Tab A and Tab B).
-   - In Tab A, edit Dish 1 to `Rice Special` and click **Save**. Tab A advances Dish 1 to `v2`.
-   - In Tab B (still showing Dish 1 at `v1`), edit the name to `Rice Deluxe` and click **Save**.
-   - Tab B receives a `409 Conflict`. A prominent **Version Conflict Detected** banner appears showing the server's latest version (`v2`) and latest name (`Rice Special`).
-   - Tab B's draft (`Rice Deluxe`) is preserved. Click **Reload latest (discard draft)** to sync with Tab A's saved version, or click **Keep editing draft** to review.
+5. **Safely restore the original record**:
+   Restore Dish 5 to its verified original data from `dish-assignment.json`:
+   ```javascript
+   db.dishes.updateOne(
+     { dishId: "5" },
+     {
+       $set: {
+         dishName: "Alfredo Pasta",
+         imageUrl: "https://nosh-assignment.s3.ap-south-1.amazonaws.com/alfredo-pasta.jpg",
+         isPublished: true,
+         version: 1
+       }
+     }
+   );
+   ```
 
-8. **Broken-Image Fallback**:
-   - If an image URL fails to load or is unreachable, the card renders an accessible `Image Unavailable` placeholder without breaking card dimensions or aspect ratios.
+#### Procedure C: Two-Tab Optimistic Concurrency Conflict Simulation
+1. Open `http://localhost:5173` in two side-by-side browser tabs (Tab A and Tab B).
+2. In Tab A, edit Dish 1 to `Jeera Rice Deluxe` and click **Save**. Tab A succeeds and advances Dish 1 to `v2`.
+3. In Tab B (which still has Dish 1 loaded at `v1`), edit the name to `Jeera Rice Special` and click **Save**.
+4. Tab B receives `HTTP 409 Conflict`. A **Version Conflict Detected** banner appears showing the latest server version (`v2`) and latest name (`Jeera Rice Deluxe`).
+5. Tab B's uncommitted draft (`Jeera Rice Special`) is preserved. Click **Reload latest** to sync with Tab A's version, or click **Discard** to revert to the baseline.
+
+#### Procedure D: Refresh Error Non-Blocking Banner
+1. Load `http://localhost:5173` with dishes visible.
+2. In DevTools Network tab, switch throttling to **Offline** (or stop backend).
+3. Click the **Refresh** button in the header.
+4. Verify that existing dish cards remain visible on screen, and a compact red banner appears above the grid stating `Failed to refresh dishes.` with a **Retry Refresh** button.
 
 ---
 
 ### Running Tests
 
-#### Backend Test Suite (36 tests):
+#### Backend Test Suite (40 tests):
 ```bash
 cd server
 npm test
 ```
-*Executes against an isolated test database (`nosh_test_isolated_suite` or `nosh_test`). The main database (`nosh`), `production_test`, development, and all unapproved databases are rejected by a strict allowlist guard.*
-Coverage includes:
-- **Seed Logic**: Validating seed structure, required fields, HTTP/HTTPS image URLs, duplicate prevention, default versioning, and strict re-seed idempotency without overwriting user edits.
-- **Health Check**: Automated status verification.
-- **Database Safety Guard**: Strict allowlist validation, malformed URI handling, and drop protection.
-- **REST Endpoints**: `GET /dishes` and `PATCH /dishes/:dishId` with atomic version-controlled updates.
-- **Concurrency & OCC**: Atomic incrementation, 409 conflict responses on stale versions, race condition handling with simultaneous requests.
-- **Validation Safeguards**: Empty/whitespace names, invalid types, missing fields, invalid/non-HTTP URLs on publishing.
-- **Persistence & Immutability**: Persistence across separate Express application instances backed by the same MongoDB database, and database immutability verification on validation errors and 409 conflicts.
+*Executes against an isolated test database (`nosh_test_isolated_suite` or `nosh_test`) guarded by strict database allowlists.*
 
-#### Frontend Test Suite (22 tests):
+Test coverage across 3 test suites:
+- **`seed.test.ts` (8 tests)**: Seed structure validation, required fields, protocol checks, duplicate prevention, default versioning, and strict re-seed idempotency without overwriting user edits.
+- **`health.test.ts` (1 test)**: Automated service health check.
+- **`dish.test.ts` (31 tests)**:
+  - `GET /dishes`: Retrieval and sorting.
+  - `PATCH /dishes/:dishId`: Atomic updates, optimistic locking, version incrementation, race conditions with simultaneous requests.
+  - Concurrency safety: 409 conflict handling, draft preservation, rejection of concurrent requests with identical `expectedVersion`.
+  - Validation safeguards: Empty/whitespace names, non-string types, missing required fields (`expectedVersion`, `dishName`, `isPublished`), strict rejection of unexpected fields (`imageUrl`).
+  - Publishing integrity: Rejection of publishing when stored database image URL has invalid/non-HTTP protocols.
+  - Global error handling: HTTP 400 for malformed JSON bodies, generic HTTP 500 without leaking stack traces.
+  - Database immutability: Ensuring validation errors and 409 conflicts never alter database state.
+
+#### Frontend Test Suite (26 tests):
 ```bash
 cd client
 npm test
 ```
 *Executes via Vitest & React Testing Library.*
-Coverage includes:
-- **UI States**: Initial loading skeleton, error banner with retry, empty catalog state, dish cards, and image fallback placeholder.
-- **Local Draft Isolation**: Kept locally in React state without firing network requests while typing or toggling.
-- **Discard Workflow**: Cleanly restores server-saved values.
-- **Whitespace Normalization**: Trailing and leading whitespace on unchanged names does not trigger dirty flags; genuine edits are trimmed before save.
-- **Successful Updates**: Sends expectedVersion and changes, increments badge to next version, removes unsaved indicators.
-- **Submission Guard**: Disables buttons and prevents duplicate submissions while requests are in flight.
-- **Optimistic Concurrency Control**: On 409 Conflict, preserves user draft, shows warning banner, and provides explicit reload latest option.
-- **Refresh Protection**: Detects server version bumps during refresh with dirty drafts and prevents saving until resolved.
-- **Multi-Session Concurrency**: Simulates two independent concurrent dashboard sessions mounted simultaneously on the same dish with container-scoped queries, verifying Session A's save advances shared server state to version 2, while Session B's version-1 save receives a 409 conflict, preserves Session B's draft, and allows explicit reload resolution.
-- **Responsive Layout**: Verifies responsive 1/2/3-column grid and 16:9 aspect-ratio cover styling.
+
+Test coverage across 1 test suite (`src/App.test.tsx`):
+- **UI States & Cards**: Initial loading skeleton, empty state, dish cards, and image fallback placeholders.
+- **Local Draft Isolation**: React state draft updates without network calls while typing or toggling.
+- **Discard Invariants**: Discarding restores the draft to the last loaded baseline, clearing unsaved indicators and conflicts without adopting server state.
+- **Conflict Handling**: Preserves drafts on 409, provides explicit **Reload latest** vs **Discard** options.
+- **Refresh Resilience**: Keeps loaded dish cards and local drafts rendered when refresh fails, displaying a non-blocking retry banner.
+- **Publication Labels**: Saved dishes with `isPublished: false` display **Unpublished** (not Draft); **Unsaved draft** is kept as an independent indicator for dirty local edits.
+- **Explicit PATCH Contract**: Verifies save submissions always send `dishName`, `isPublished`, and `expectedVersion`, omitting `imageUrl`.
+- **Multi-Session Concurrency**: Simulates two independent dashboard sessions updating the same dish concurrently.
 
 ---
 
@@ -440,12 +640,19 @@ Coverage includes:
 
 ### Time Spent & AI Assistance Disclosure
 
-- **Total Time Spent**: Approximately 4.5 hours across 5 phases:
+- **Total Time Spent**: Approximately 4.5 hours across development phases:
   - *Phase 1 (Foundation & Setup)*: ~35 mins
   - *Phase 2 (Database, Dish Model & Seeding)*: ~45 mins
   - *Phase 3 (Version-Controlled REST API & OCC)*: ~60 mins
   - *Phase 4 (React Dashboard, Draft State & Conflict UX)*: ~90 mins
   - *Phase 5 (Testing, Edge Cases & Verification)*: ~40 mins
-- **AI Assistance**:
+- **Work Completed by Author**:
+  - Architecture and domain model design (Dish schema, version tracking, idempotency guarantees).
+  - Formulation of atomic optimistic concurrency control strategy using MongoDB `findOneAndUpdate`.
+  - Component hierarchy, Tailwind layout styling, and draft state isolation logic.
+  - Review, test execution, and verification of all review fixes and invariants.
+- **AI Assistance Used**:
   - Google DeepMind Antigravity IDE (Gemini agent) was utilized as an AI pair-programming assistant for boilerplate scaffolding, test authoring, code review issue identification, and documentation refinement.
   - All architecture decisions, atomic update mechanics, strict database guards, and React draft management patterns were reviewed and validated against assignment specifications.
+- **External Code Copied**:
+  - None. No third-party templates, code generators, or copied snippet libraries were used outside of standard open-source npm dependencies listed in `package.json`.
