@@ -55,8 +55,8 @@ export default function App() {
           </div>
         )}
 
-        {/* Global Error State */}
-        {globalError && (
+        {/* Global Error State (Full-page when no dishes loaded) */}
+        {globalError && dishes.length === 0 && (
           <div
             data-testid="api-error-state"
             role="alert"
@@ -121,8 +121,29 @@ export default function App() {
         )}
 
         {/* Dishes Grid */}
-        {!globalError && dishes.length > 0 && (
+        {dishes.length > 0 && (
           <div className="space-y-6">
+            {/* Compact non-blocking error banner when a refresh fails after dishes are already loaded */}
+            {globalError && (
+              <div
+                data-testid="refresh-error-banner"
+                role="alert"
+                className="p-3.5 rounded-xl bg-red-950/60 border border-red-700/60 text-red-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-red-400 font-bold shrink-0">⚠️ Refresh Failed:</span>
+                  <span className="text-red-200/90">{globalError}. Existing dish data and drafts are preserved.</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadDishes}
+                  className="self-start sm:self-auto px-3 py-1 text-xs font-semibold rounded-lg bg-red-700 hover:bg-red-600 active:scale-95 text-white transition shrink-0"
+                >
+                  Retry Refresh
+                </button>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-900">
               <div>
                 <h2 className="text-lg font-bold text-slate-100">

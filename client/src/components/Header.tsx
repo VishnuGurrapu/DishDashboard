@@ -47,7 +47,7 @@ export const Header = ({
             </span>
             <span className="text-slate-600">|</span>
             <span className="text-slate-400 font-medium">
-              {totalDishes - publishedCount} Draft
+              {totalDishes - publishedCount} Unpublished
             </span>
           </div>
 

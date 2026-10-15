@@ -59,7 +59,7 @@ describe('DishDashboard App (Phase 4)', () => {
     expect(screen.getByText('ID: 2')).toBeInTheDocument()
     expect(screen.getAllByText('v1')).toHaveLength(2)
     expect(screen.getByText('Live')).toBeInTheDocument()
-    expect(screen.getByText('Draft')).toBeInTheDocument()
+    expect(screen.getByText('Unpublished')).toBeInTheDocument()
     expect(screen.getByText('Total:')).toBeInTheDocument()
   })
 
@@ -189,6 +189,7 @@ describe('DishDashboard App (Phase 4)', () => {
         body: JSON.stringify({
           expectedVersion: 1,
           dishName: 'Premium Jeera Rice',
+          isPublished: true,
         }),
       })
     )
@@ -435,6 +436,7 @@ describe('DishDashboard App (Phase 4)', () => {
           body: JSON.stringify({
             expectedVersion: 1,
             dishName: 'My Local Edit Further',
+            isPublished: true,
           }),
         })
       )
@@ -923,6 +925,7 @@ describe('DishDashboard App (Phase 4)', () => {
             body: JSON.stringify({
               expectedVersion: 1,
               dishName: 'Kashmiri Pulao',
+              isPublished: true,
             }),
           })
         )
@@ -976,4 +979,235 @@ describe('DishDashboard App (Phase 4)', () => {
       expect(input).toHaveValue('    ')
     })
   })
+
+  describe('Phase 2: Frontend Review Fixes & Invariant Tests', () => {
+    it('conflict -> edit -> Discard restores draft to last loaded values, does NOT adopt remote conflict dish, and clears unsaved state', async () => {
+      vi.spyOn(globalThis, 'fetch')
+        // 1. Initial GET returns dish 1 at v1 with name "Jeera Rice"
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+        // 2. Save returns 409 Conflict with remote currentDish v2 ("Server Remote Rice")
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            error: 'Conflict',
+            message: 'Stale version conflict.',
+            currentDish: {
+              ...sampleDishes[0],
+              dishName: 'Server Remote Rice',
+              version: 2,
+            },
+          }),
+        } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      // User makes first edit
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: 'Local Attempt 1' } })
+
+      const card = screen.getByTestId('dish-card-1')
+      const saveBtn = card.querySelector('button[type="submit"]')!
+      fireEvent.click(saveBtn)
+
+      // Conflict banner appears
+      await waitFor(() => {
+        expect(screen.getByText(/Version Conflict Detected/i)).toBeInTheDocument()
+      })
+
+      // User makes another edit while in conflict
+      fireEvent.change(input, { target: { value: 'Local Attempt 2' } })
+      expect(input).toHaveValue('Local Attempt 2')
+
+      // User clicks Discard
+      const discardBtn = within(card).getByRole('button', { name: 'Discard' })
+      expect(discardBtn).toHaveTextContent('Discard')
+      fireEvent.click(discardBtn)
+
+      // Invariant: Discard MUST restore to last loaded values ("Jeera Rice", v1), NOT "Server Remote Rice" (v2)!
+      expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      expect(screen.queryByDisplayValue('Server Remote Rice')).not.toBeInTheDocument()
+      expect(within(card).getByText('v1')).toBeInTheDocument()
+      expect(screen.queryByText('v2')).not.toBeInTheDocument()
+
+      // Conflict banner and unsaved badge are dismissed
+      expect(screen.queryByText(/Version Conflict Detected/i)).not.toBeInTheDocument()
+      expect(screen.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+    })
+
+    it('refresh failure after a successful load preserves loaded dish cards and drafts, showing a compact non-blocking banner', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        // 1. Initial GET succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+        // 2. Refresh fails
+        .mockRejectedValueOnce(new Error('Network offline during refresh'))
+        // 3. Retry succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Jeera Rice')).toBeInTheDocument()
+      })
+
+      // User edits dish 1 locally
+      const input = screen.getByDisplayValue('Jeera Rice')
+      fireEvent.change(input, { target: { value: 'Unsaved Local Rice' } })
+      expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+      // User triggers refresh
+      const refreshBtn = screen.getByRole('button', { name: /Refresh/i })
+      fireEvent.click(refreshBtn)
+
+      // Compact banner appears
+      await waitFor(() => {
+        expect(screen.getByTestId('refresh-error-banner')).toBeInTheDocument()
+      })
+      expect(
+        screen.getByText(/Network offline during refresh.*Existing dish data and drafts are preserved/i)
+      ).toBeInTheDocument()
+
+      // Full page error state is NOT shown
+      expect(screen.queryByTestId('api-error-state')).not.toBeInTheDocument()
+
+      // Dishes grid is STILL visible with both cards
+      expect(screen.getByTestId('dishes-grid')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('Paneer Tikka')).toBeInTheDocument()
+
+      // Local draft is preserved!
+      expect(input).toHaveValue('Unsaved Local Rice')
+      expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+
+      // User clicks "Retry Refresh" on the compact banner
+      const retryBtn = screen.getByRole('button', { name: /Retry Refresh/i })
+      fireEvent.click(retryBtn)
+
+      // Banner disappears once refresh resolves
+      await waitFor(() => {
+        expect(screen.queryByTestId('refresh-error-banner')).not.toBeInTheDocument()
+      })
+      // Draft remains intact after successful refresh
+      expect(input).toHaveValue('Unsaved Local Rice')
+      expect(screen.getByTestId('unsaved-badge')).toBeInTheDocument()
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+    })
+
+    it('correctly displays Unpublished for saved dishes with isPublished === false and distinguishes from Unsaved draft', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ dishes: sampleDishes, total: 2 }),
+      } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Paneer Tikka')).toBeInTheDocument()
+      })
+
+      // Card 2 is an unpublished saved dish (isPublished: false)
+      const card2 = screen.getByTestId('dish-card-2')
+      const card2Scope = within(card2)
+
+      // Must display 'Unpublished', not 'Draft'
+      expect(card2Scope.getByText('Unpublished')).toBeInTheDocument()
+      expect(card2Scope.queryByText('Draft')).not.toBeInTheDocument()
+
+      // There are no local unsaved edits initially
+      expect(card2Scope.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+
+      // Header stats show 1 Unpublished, NOT 1 Draft
+      expect(screen.getByText('1 Unpublished')).toBeInTheDocument()
+      expect(screen.queryByText('1 Draft')).not.toBeInTheDocument()
+
+      // Now introduce a local edit on card 2
+      const input = card2Scope.getByDisplayValue('Paneer Tikka')
+      fireEvent.change(input, { target: { value: 'Paneer Tikka Modified' } })
+
+      // 'Unsaved draft' badge now appears, alongside 'Unpublished' badge
+      expect(card2Scope.getByTestId('unsaved-badge')).toBeInTheDocument()
+      expect(card2Scope.getByText('Unsaved draft')).toBeInTheDocument()
+      expect(card2Scope.getByText('Unpublished')).toBeInTheDocument()
+
+      // Discarding returns to clean state
+      const discardBtn = card2.querySelector('button[type="button"]')!
+      fireEvent.click(discardBtn)
+
+      expect(card2Scope.queryByTestId('unsaved-badge')).not.toBeInTheDocument()
+      expect(card2Scope.getByText('Unpublished')).toBeInTheDocument()
+    })
+
+    it('always sends all three explicit PATCH fields (expectedVersion, dishName, isPublished) without imageUrl when only publishing changes', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ dishes: sampleDishes, total: 2 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            message: 'Dish updated successfully',
+            dish: {
+              ...sampleDishes[1],
+              isPublished: true,
+              version: 2,
+            },
+          }),
+        } as Response)
+
+      render(<App />)
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Paneer Tikka')).toBeInTheDocument()
+      })
+
+      // Toggle publication only on dish 2
+      const card2 = screen.getByTestId('dish-card-2')
+      const checkbox = card2.querySelector('input[type="checkbox"]')!
+      fireEvent.click(checkbox)
+
+      const saveBtn = card2.querySelector('button[type="submit"]')!
+      fireEvent.click(saveBtn)
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenLastCalledWith(
+          expect.stringContaining('/dishes/2'),
+          expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+              expectedVersion: 1,
+              dishName: 'Paneer Tikka',
+              isPublished: true,
+            }),
+          })
+        )
+      })
+
+      const lastCall = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1]
+      const requestBody = JSON.parse(String(lastCall[1]?.body || '{}'))
+      expect(requestBody).toHaveProperty('expectedVersion', 1)
+      expect(requestBody).toHaveProperty('dishName', 'Paneer Tikka')
+      expect(requestBody).toHaveProperty('isPublished', true)
+      expect(requestBody).not.toHaveProperty('imageUrl')
+    })
+  })
 })
+

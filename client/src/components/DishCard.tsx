@@ -86,7 +86,7 @@ export const DishCard: React.FC<DishCardProps> = ({
                 : 'bg-slate-950/80 text-slate-400 border-slate-700/60'
             }`}
           >
-            {dish.isPublished ? 'Live' : 'Draft'}
+            {dish.isPublished ? 'Live' : 'Unpublished'}
           </span>
         </div>
       </div>

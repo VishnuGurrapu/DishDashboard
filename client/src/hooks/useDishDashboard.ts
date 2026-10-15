@@ -1,34 +1,29 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { Dish, DishDraft, ConflictState, DishPatchPayload } from '../types/dish'
 import { fetchDishes, updateDish } from '../services/api'
 import { hasMeaningfulDraftChanges, normalizeDishName } from '../utils/dish'
 
+interface CatalogState {
+  dishes: Dish[]
+  drafts: Record<string, DishDraft>
+  conflictMap: Record<string, ConflictState | null>
+}
+
 export const useDishDashboard = () => {
-  const [dishes, setDishes] = useState<Dish[]>([])
-  const [drafts, setDrafts] = useState<Record<string, DishDraft>>({})
+  const [catalog, setCatalog] = useState<CatalogState>({
+    dishes: [],
+    drafts: {},
+    conflictMap: {},
+  })
   const [savingMap, setSavingMap] = useState<Record<string, boolean>>({})
   const [errorMap, setErrorMap] = useState<Record<string, string | null>>({})
-  const [conflictMap, setConflictMap] = useState<Record<string, ConflictState | null>>({})
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [globalError, setGlobalError] = useState<string | null>(null)
 
-  // Keep live refs to avoid stale closures during asynchronous refresh operations
-  const draftsRef = useRef(drafts)
-  draftsRef.current = drafts
-
-  const dishesRef = useRef(dishes)
-  dishesRef.current = dishes
-
-  const conflictMapRef = useRef(conflictMap)
-  conflictMapRef.current = conflictMap
-
-  const loadDishes = useCallback(async () => {
-    setIsLoading(true)
-    setGlobalError(null)
-    try {
-      const fetchedDishes = await fetchDishes()
-      const currentDrafts = draftsRef.current
-      const currentDishes = dishesRef.current
+  const applyFetchedDishes = useCallback((fetchedDishes: Dish[]) => {
+    setCatalog((prev) => {
+      const currentDishes = prev.dishes
+      const currentDrafts = prev.drafts
       const isInitialLoad = currentDishes.length === 0
 
       if (isInitialLoad) {
@@ -40,62 +35,76 @@ export const useDishDashboard = () => {
             isPublished: dish.isPublished,
           }
         })
-        setDishes(fetchedDishes)
-        setDrafts(initialDrafts)
-      } else {
-        // Refresh with existing data:
-        // Safely evaluate each dish to ensure existing dirty drafts are never combined
-        // with newly fetched versions in a way that silently permits overwriting remote changes.
-        const nextDishes: Dish[] = []
-        const nextDrafts: Record<string, DishDraft> = { ...currentDrafts }
-        const newConflicts: Record<string, ConflictState | null> = {}
-
-        fetchedDishes.forEach((fetchedDish) => {
-          const prevBase = currentDishes.find((d) => d.dishId === fetchedDish.dishId)
-          const draft = currentDrafts[fetchedDish.dishId]
-
-          // Check if user currently has an unsaved dirty draft for this dish using normalized comparison
-          const isDirty = hasMeaningfulDraftChanges(draft, prevBase)
-
-          if (!isDirty) {
-            // Clean dish: safely adopt fetched dish and sync clean draft
-            nextDishes.push(fetchedDish)
-            nextDrafts[fetchedDish.dishId] = {
-              dishName: fetchedDish.dishName,
-              isPublished: fetchedDish.isPublished,
-            }
-            newConflicts[fetchedDish.dishId] = null
-          } else {
-            // Dirty draft: check if remote server record changed
-            const serverChanged =
-              !prevBase ||
-              fetchedDish.version !== prevBase.version ||
-              fetchedDish.dishName !== prevBase.dishName ||
-              fetchedDish.imageUrl !== prevBase.imageUrl ||
-              fetchedDish.isPublished !== prevBase.isPublished
-
-            if (serverChanged && prevBase) {
-              // Remote changes occurred while user has unsaved edits!
-              // 1. Preserve the user's draft in nextDrafts
-              // 2. Retain the original base dish (prevBase) so expectedVersion remains original
-              // 3. Mark the dish in conflict state requiring explicit resolution
-              nextDishes.push(prevBase)
-              newConflicts[fetchedDish.dishId] = {
-                isConflicted: true,
-                currentDish: fetchedDish,
-                message: `Server updated to v${fetchedDish.version} while you had unsaved edits. Please reload latest or discard changes to sync.`,
-              }
-            } else {
-              // Server did not change: retain existing base dish and dirty draft
-              nextDishes.push(prevBase || fetchedDish)
-            }
-          }
-        })
-
-        setDishes(nextDishes)
-        setDrafts(nextDrafts)
-        setConflictMap((prev) => ({ ...prev, ...newConflicts }))
+        return {
+          dishes: fetchedDishes,
+          drafts: initialDrafts,
+          conflictMap: {},
+        }
       }
+
+      // Refresh with existing data:
+      // Safely evaluate each dish to ensure existing dirty drafts are never combined
+      // with newly fetched versions in a way that silently permits overwriting remote changes.
+      const nextDishes: Dish[] = []
+      const nextDrafts: Record<string, DishDraft> = { ...currentDrafts }
+      const newConflicts: Record<string, ConflictState | null> = {}
+
+      fetchedDishes.forEach((fetchedDish) => {
+        const prevBase = currentDishes.find((d) => d.dishId === fetchedDish.dishId)
+        const draft = currentDrafts[fetchedDish.dishId]
+
+        // Check if user currently has an unsaved dirty draft for this dish using normalized comparison
+        const isDirty = hasMeaningfulDraftChanges(draft, prevBase)
+
+        if (!isDirty) {
+          // Clean dish: safely adopt fetched dish and sync clean draft
+          nextDishes.push(fetchedDish)
+          nextDrafts[fetchedDish.dishId] = {
+            dishName: fetchedDish.dishName,
+            isPublished: fetchedDish.isPublished,
+          }
+          newConflicts[fetchedDish.dishId] = null
+        } else {
+          // Dirty draft: check if remote server record changed
+          const serverChanged =
+            !prevBase ||
+            fetchedDish.version !== prevBase.version ||
+            fetchedDish.dishName !== prevBase.dishName ||
+            fetchedDish.imageUrl !== prevBase.imageUrl ||
+            fetchedDish.isPublished !== prevBase.isPublished
+
+          if (serverChanged && prevBase) {
+            // Remote changes occurred while user has unsaved edits!
+            // 1. Preserve the user's draft in nextDrafts
+            // 2. Retain the original base dish (prevBase) so expectedVersion remains original
+            // 3. Mark the dish in conflict state requiring explicit resolution
+            nextDishes.push(prevBase)
+            newConflicts[fetchedDish.dishId] = {
+              isConflicted: true,
+              currentDish: fetchedDish,
+              message: `Server updated to v${fetchedDish.version} while you had unsaved edits. Please reload latest or discard changes to sync.`,
+            }
+          } else {
+            // Server did not change: retain existing base dish and dirty draft
+            nextDishes.push(prevBase || fetchedDish)
+          }
+        }
+      })
+
+      return {
+        dishes: nextDishes,
+        drafts: nextDrafts,
+        conflictMap: { ...prev.conflictMap, ...newConflicts },
+      }
+    })
+  }, [])
+
+  const loadDishes = useCallback(async () => {
+    setIsLoading(true)
+    setGlobalError(null)
+    try {
+      const fetchedDishes = await fetchDishes()
+      applyFetchedDishes(fetchedDishes)
     } catch (err) {
       setGlobalError(
         err instanceof Error ? err.message : 'Failed to connect to dishes API.'
@@ -103,18 +112,41 @@ export const useDishDashboard = () => {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [applyFetchedDishes])
 
   useEffect(() => {
-    void loadDishes()
-  }, [loadDishes])
+    let ignore = false
+
+    fetchDishes()
+      .then((fetchedDishes) => {
+        if (!ignore) {
+          applyFetchedDishes(fetchedDishes)
+          setIsLoading(false)
+        }
+      })
+      .catch((err) => {
+        if (!ignore) {
+          setGlobalError(
+            err instanceof Error ? err.message : 'Failed to connect to dishes API.'
+          )
+          setIsLoading(false)
+        }
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [applyFetchedDishes])
 
   const updateDraftName = (dishId: string, newName: string) => {
-    setDrafts((prev) => ({
+    setCatalog((prev) => ({
       ...prev,
-      [dishId]: {
-        ...prev[dishId],
-        dishName: newName,
+      drafts: {
+        ...prev.drafts,
+        [dishId]: {
+          ...prev.drafts[dishId],
+          dishName: newName,
+        },
       },
     }))
     // Clear any previous error when user edits
@@ -122,44 +154,45 @@ export const useDishDashboard = () => {
   }
 
   const updateDraftPublished = (dishId: string, isPublished: boolean) => {
-    setDrafts((prev) => ({
+    setCatalog((prev) => ({
       ...prev,
-      [dishId]: {
-        ...prev[dishId],
-        isPublished,
+      drafts: {
+        ...prev.drafts,
+        [dishId]: {
+          ...prev.drafts[dishId],
+          isPublished,
+        },
       },
     }))
     setErrorMap((prev) => ({ ...prev, [dishId]: null }))
   }
 
   const discardDraft = (dishId: string) => {
-    const original = dishes.find((d) => d.dishId === dishId)
-    const conflict = conflictMap[dishId]
-    // If a conflict existed, user discarding accepts the latest server record
-    const target = conflict?.currentDish || original
-    if (!target) return
+    setCatalog((prev) => {
+      const original = prev.dishes.find((d) => d.dishId === dishId)
+      if (!original) return prev
 
-    if (conflict?.currentDish) {
-      // Update loaded dish to latest server record
-      setDishes((prev) =>
-        prev.map((d) => (d.dishId === dishId ? conflict.currentDish : d))
-      )
-    }
-
-    setDrafts((prev) => ({
-      ...prev,
-      [dishId]: {
-        dishName: target.dishName,
-        isPublished: target.isPublished,
-      },
-    }))
+      return {
+        ...prev,
+        drafts: {
+          ...prev.drafts,
+          [dishId]: {
+            dishName: original.dishName,
+            isPublished: original.isPublished,
+          },
+        },
+        conflictMap: {
+          ...prev.conflictMap,
+          [dishId]: null,
+        },
+      }
+    })
     setErrorMap((prev) => ({ ...prev, [dishId]: null }))
-    setConflictMap((prev) => ({ ...prev, [dishId]: null }))
   }
 
   const saveDraft = async (dishId: string) => {
     // Prevent saving if there is an unresolved conflict
-    if (conflictMap[dishId]?.isConflicted) {
+    if (catalog.conflictMap[dishId]?.isConflicted) {
       setErrorMap((prev) => ({
         ...prev,
         [dishId]:
@@ -168,8 +201,8 @@ export const useDishDashboard = () => {
       return
     }
 
-    const original = dishes.find((d) => d.dishId === dishId)
-    const draft = drafts[dishId]
+    const original = catalog.dishes.find((d) => d.dishId === dishId)
+    const draft = catalog.drafts[dishId]
     if (!original || !draft) return
     if (savingMap[dishId]) return // Prevent duplicate submissions
 
@@ -179,44 +212,50 @@ export const useDishDashboard = () => {
     const hasPublishChange = draft.isPublished !== original.isPublished
     if (!hasNameChange && !hasPublishChange) return
 
-    // Prepare payload sending only changed fields (with trimmed name) and expectedVersion
+    // Prepare payload sending all three required fields with trimmed name
     const payload: DishPatchPayload = {
       expectedVersion: original.version,
+      dishName: normalizeDishName(draft.dishName),
+      isPublished: draft.isPublished,
     }
-    if (hasNameChange) payload.dishName = normalizeDishName(draft.dishName)
-    if (hasPublishChange) payload.isPublished = draft.isPublished
 
     // Mark dish as currently saving
     setSavingMap((prev) => ({ ...prev, [dishId]: true }))
     setErrorMap((prev) => ({ ...prev, [dishId]: null }))
-    setConflictMap((prev) => ({ ...prev, [dishId]: null }))
+    setCatalog((prev) => ({
+      ...prev,
+      conflictMap: { ...prev.conflictMap, [dishId]: null },
+    }))
 
     try {
       const result = await updateDish(dishId, payload)
 
       if (result.success) {
         // Update loaded dish with server response
-        setDishes((prev) =>
-          prev.map((d) => (d.dishId === dishId ? result.dish : d))
-        )
-        // Reset draft to match newly saved server record
-        setDrafts((prev) => ({
+        setCatalog((prev) => ({
           ...prev,
-          [dishId]: {
-            dishName: result.dish.dishName,
-            isPublished: result.dish.isPublished,
+          dishes: prev.dishes.map((d) => (d.dishId === dishId ? result.dish : d)),
+          drafts: {
+            ...prev.drafts,
+            [dishId]: {
+              dishName: result.dish.dishName,
+              isPublished: result.dish.isPublished,
+            },
           },
+          conflictMap: { ...prev.conflictMap, [dishId]: null },
         }))
-        setConflictMap((prev) => ({ ...prev, [dishId]: null }))
         setErrorMap((prev) => ({ ...prev, [dishId]: null }))
       } else if (result.conflict) {
         // On 409 conflict, PRESERVE draft and record conflict state
-        setConflictMap((prev) => ({
+        setCatalog((prev) => ({
           ...prev,
-          [dishId]: {
-            isConflicted: true,
-            currentDish: result.currentDish,
-            message: result.message,
+          conflictMap: {
+            ...prev.conflictMap,
+            [dishId]: {
+              isConflicted: true,
+              currentDish: result.currentDish,
+              message: result.message,
+            },
           },
         }))
       } else {
@@ -229,47 +268,53 @@ export const useDishDashboard = () => {
   }
 
   const reloadLatest = (dishId: string) => {
-    const conflict = conflictMap[dishId]
-    if (!conflict) return
+    setCatalog((prev) => {
+      const conflict = prev.conflictMap[dishId]
+      if (!conflict) return prev
 
-    const latest = conflict.currentDish
+      const latest = conflict.currentDish
 
-    // Replace loaded dish and reset draft to latest
-    setDishes((prev) =>
-      prev.map((d) => (d.dishId === dishId ? latest : d))
-    )
-    setDrafts((prev) => ({
-      ...prev,
-      [dishId]: {
-        dishName: latest.dishName,
-        isPublished: latest.isPublished,
-      },
-    }))
-    setConflictMap((prev) => ({ ...prev, [dishId]: null }))
+      // Replace loaded dish and reset draft to latest
+      return {
+        ...prev,
+        dishes: prev.dishes.map((d) => (d.dishId === dishId ? latest : d)),
+        drafts: {
+          ...prev.drafts,
+          [dishId]: {
+            dishName: latest.dishName,
+            isPublished: latest.isPublished,
+          },
+        },
+        conflictMap: { ...prev.conflictMap, [dishId]: null },
+      }
+    })
     setErrorMap((prev) => ({ ...prev, [dishId]: null }))
   }
 
   const dismissConflict = (dishId: string) => {
-    setConflictMap((prev) => ({ ...prev, [dishId]: null }))
+    setCatalog((prev) => ({
+      ...prev,
+      conflictMap: { ...prev.conflictMap, [dishId]: null },
+    }))
   }
 
   // Count unsaved drafts across all dishes using normalized comparison
-  const unsavedCount = dishes.reduce((count, dish) => {
-    const draft = drafts[dish.dishId]
+  const unsavedCount = catalog.dishes.reduce((count, dish) => {
+    const draft = catalog.drafts[dish.dishId]
     if (hasMeaningfulDraftChanges(draft, dish)) {
       return count + 1
     }
     return count
   }, 0)
 
-  const publishedCount = dishes.filter((d) => d.isPublished).length
+  const publishedCount = catalog.dishes.filter((d) => d.isPublished).length
 
   return {
-    dishes,
-    drafts,
+    dishes: catalog.dishes,
+    drafts: catalog.drafts,
     savingMap,
     errorMap,
-    conflictMap,
+    conflictMap: catalog.conflictMap,
     isLoading,
     globalError,
     unsavedCount,

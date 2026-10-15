@@ -13,8 +13,8 @@ export interface DishDraft {
 
 export interface DishPatchPayload {
   expectedVersion: number
-  dishName?: string
-  isPublished?: boolean
+  dishName: string
+  isPublished: boolean
 }
 
 export interface ConflictState {
