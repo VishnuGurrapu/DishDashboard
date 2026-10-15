@@ -1,8 +1,38 @@
-import express, { Application, Request, Response } from 'express'
+import express, {
+  Application,
+  Request,
+  Response,
+  NextFunction,
+  ErrorRequestHandler,
+} from 'express'
 import cors from 'cors'
 import { config } from './config/env'
 import { healthRouter } from './routes/health.route'
 import { dishRouter } from './routes/dish.route'
+
+export const errorHandler: ErrorRequestHandler = (
+  err: any,
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (res.headersSent) {
+    return next(err)
+  }
+
+  if (err && typeof err === 'object' && err.type === 'entity.parse.failed') {
+    res.status(400).json({
+      error: 'Bad Request',
+      message: 'Invalid JSON body',
+    })
+    return
+  }
+
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: 'Unexpected error',
+  })
+}
 
 export const createApp = (): Application => {
   const app = express()
@@ -25,5 +55,9 @@ export const createApp = (): Application => {
     res.status(404).json({ error: 'Route not found' })
   })
 
+  // Error handling middleware
+  app.use(errorHandler)
+
   return app
 }
+

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import request from 'supertest'
 import mongoose from 'mongoose'
-import { createApp } from '../src/app'
+import express from 'express'
+import { createApp, errorHandler } from '../src/app'
 import { Dish } from '../src/models/dish.model'
 import {
   connectTestDatabase,
@@ -186,19 +187,20 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 'Paneer Tikka Masala',
+          isPublished: true,
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(200)
       expect(response.body.message).toBe('Dish updated successfully')
       expect(response.body.dish.dishName).toBe('Paneer Tikka Masala')
+      expect(response.body.dish.isPublished).toBe(true)
       expect(response.body.dish.version).toBe(2)
 
       // Verify in MongoDB
       const inDb = await Dish.findOne({ dishId: '101' })
       expect(inDb?.dishName).toBe('Paneer Tikka Masala')
       expect(inDb?.version).toBe(2)
-      // Publication status was not touched
       expect(inDb?.isPublished).toBe(true)
     })
 
@@ -206,15 +208,18 @@ describe('Dishes API (/dishes)', () => {
       const response = await request(app)
         .patch('/dishes/102')
         .send({
+          dishName: 'Garlic Naan',
           isPublished: true,
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(200)
+      expect(response.body.dish.dishName).toBe('Garlic Naan')
       expect(response.body.dish.isPublished).toBe(true)
       expect(response.body.dish.version).toBe(2)
 
       const inDb = await Dish.findOne({ dishId: '102' })
+      expect(inDb?.dishName).toBe('Garlic Naan')
       expect(inDb?.isPublished).toBe(true)
       expect(inDb?.version).toBe(2)
     })
@@ -232,6 +237,11 @@ describe('Dishes API (/dishes)', () => {
       expect(response.body.dish.dishName).toBe('Stuffed Garlic Naan')
       expect(response.body.dish.isPublished).toBe(true)
       expect(response.body.dish.version).toBe(2)
+
+      const inDb = await Dish.findOne({ dishId: '102' })
+      expect(inDb?.dishName).toBe('Stuffed Garlic Naan')
+      expect(inDb?.isPublished).toBe(true)
+      expect(inDb?.version).toBe(2)
     })
   })
 
@@ -242,6 +252,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 'Updated Name 1',
+          isPublished: true,
           expectedVersion: 1,
         })
 
@@ -250,6 +261,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 'Stale Attempt',
+          isPublished: true,
           expectedVersion: 1,
         })
 
@@ -270,11 +282,11 @@ describe('Dishes API (/dishes)', () => {
       // Fire two concurrent requests with identical expectedVersion
       const request1 = request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Concurrent Candidate A', expectedVersion: 1 })
+        .send({ dishName: 'Concurrent Candidate A', isPublished: true, expectedVersion: 1 })
 
       const request2 = request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Concurrent Candidate B', expectedVersion: 1 })
+        .send({ dishName: 'Concurrent Candidate B', isPublished: true, expectedVersion: 1 })
 
       const [res1, res2] = await Promise.all([request1, request2])
 
@@ -294,6 +306,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: '',
+          isPublished: true,
           expectedVersion: 1,
         })
 
@@ -306,6 +319,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: '    ',
+          isPublished: true,
           expectedVersion: 1,
         })
 
@@ -318,6 +332,44 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 12345,
+          isPublished: true,
+          expectedVersion: 1,
+        })
+
+      expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Bad Request')
+    })
+
+    it('rejects missing dishName with 400 Bad Request', async () => {
+      const response = await request(app)
+        .patch('/dishes/101')
+        .send({
+          isPublished: true,
+          expectedVersion: 1,
+        })
+
+      expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Bad Request')
+    })
+
+    it('rejects missing isPublished with 400 Bad Request', async () => {
+      const response = await request(app)
+        .patch('/dishes/101')
+        .send({
+          dishName: 'Valid Name',
+          expectedVersion: 1,
+        })
+
+      expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Bad Request')
+    })
+
+    it('rejects non-boolean isPublished with 400 Bad Request', async () => {
+      const response = await request(app)
+        .patch('/dishes/101')
+        .send({
+          dishName: 'Valid Name',
+          isPublished: 'true',
           expectedVersion: 1,
         })
 
@@ -330,6 +382,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 'Valid Name',
+          isPublished: true,
         })
 
       expect(response.status).toBe(400)
@@ -339,53 +392,55 @@ describe('Dishes API (/dishes)', () => {
     it('rejects invalid expectedVersion values (string, negative, float)', async () => {
       const resString = await request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Valid Name', expectedVersion: '1' })
+        .send({ dishName: 'Valid Name', isPublished: true, expectedVersion: '1' })
       expect(resString.status).toBe(400)
 
       const resNegative = await request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Valid Name', expectedVersion: -1 })
+        .send({ dishName: 'Valid Name', isPublished: true, expectedVersion: -1 })
       expect(resNegative.status).toBe(400)
 
       const resFloat = await request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Valid Name', expectedVersion: 1.5 })
+        .send({ dishName: 'Valid Name', isPublished: true, expectedVersion: 1.5 })
       expect(resFloat.status).toBe(400)
     })
 
-    it('rejects non-boolean isPublished with 400 Bad Request', async () => {
+    it('rejects request containing imageUrl with 400 Bad Request and leaves database record unchanged', async () => {
+      const original = await Dish.findOne({ dishId: '101' }).lean()
+
       const response = await request(app)
         .patch('/dishes/101')
         .send({
-          isPublished: 'true',
+          dishName: 'Attempted Image Change',
+          isPublished: true,
+          imageUrl: 'https://example.com/new-pic.jpg',
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Bad Request')
+
+      // Verify database record remains completely unchanged
+      const after = await Dish.findOne({ dishId: '101' }).lean()
+      expect(after?.dishName).toBe(original?.dishName)
+      expect(after?.imageUrl).toBe(original?.imageUrl)
+      expect(after?.isPublished).toBe(original?.isPublished)
+      expect(after?.version).toBe(original?.version)
     })
 
-    it('rejects invalid image URL protocols with 400 Bad Request', async () => {
+    it('rejects request with only expectedVersion (missing dishName and isPublished) with 400 Bad Request', async () => {
       const response = await request(app)
         .patch('/dishes/101')
         .send({
-          imageUrl: 'ftp://example.com/pic.jpg',
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Bad Request')
     })
 
-    it('rejects request with no update fields provided with 400 Bad Request', async () => {
-      const response = await request(app)
-        .patch('/dishes/101')
-        .send({
-          expectedVersion: 1,
-        })
-
-      expect(response.status).toBe(400)
-    })
-
-    it('rejects publishing when existing dish in DB has malformed URL', async () => {
+    it('rejects publishing when existing dish in DB has malformed URL and does not mutate database', async () => {
       // Create a test dish with malformed URL in DB
       await Dish.create({
         dishId: 'broken-img-1',
@@ -398,15 +453,20 @@ describe('Dishes API (/dishes)', () => {
       const response = await request(app)
         .patch('/dishes/broken-img-1')
         .send({
+          dishName: 'Malformed URL Dish',
           isPublished: true,
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(400)
       expect(response.body.message).toMatch(/valid HTTP or HTTPS/i)
+
+      const inDb = await Dish.findOne({ dishId: 'broken-img-1' })
+      expect(inDb?.isPublished).toBe(false)
+      expect(inDb?.version).toBe(1)
     })
 
-    it('rejects publishing when existing dish in DB has non-HTTP protocol URL', async () => {
+    it('rejects publishing when existing dish in DB has non-HTTP protocol URL and does not mutate database', async () => {
       await Dish.create({
         dishId: 'ftp-img',
         dishName: 'FTP URL Dish',
@@ -418,12 +478,17 @@ describe('Dishes API (/dishes)', () => {
       const response = await request(app)
         .patch('/dishes/ftp-img')
         .send({
+          dishName: 'FTP URL Dish',
           isPublished: true,
           expectedVersion: 1,
         })
 
       expect(response.status).toBe(400)
       expect(response.body.message).toMatch(/valid HTTP or HTTPS/i)
+
+      const inDb = await Dish.findOne({ dishId: 'ftp-img' })
+      expect(inDb?.isPublished).toBe(false)
+      expect(inDb?.version).toBe(1)
     })
 
     it('allows publishing when existing dish has a valid HTTP/HTTPS URL', async () => {
@@ -431,6 +496,7 @@ describe('Dishes API (/dishes)', () => {
       const response = await request(app)
         .patch('/dishes/102')
         .send({
+          dishName: 'Garlic Naan',
           isPublished: true,
           expectedVersion: 1,
         })
@@ -447,6 +513,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/non-existent-999')
         .send({
           dishName: 'New Dish',
+          isPublished: true,
           expectedVersion: 1,
         })
 
@@ -463,6 +530,7 @@ describe('Dishes API (/dishes)', () => {
         .patch('/dishes/101')
         .send({
           dishName: 'Persistent Paneer Butter Masala',
+          isPublished: true,
           expectedVersion: 1,
         })
       expect(updateRes.status).toBe(200)
@@ -493,7 +561,7 @@ describe('Dishes API (/dishes)', () => {
       // 1. Invalid PATCH request (empty name)
       const badReqRes = await request(app)
         .patch('/dishes/101')
-        .send({ dishName: '   ', expectedVersion: 1 })
+        .send({ dishName: '   ', isPublished: true, expectedVersion: 1 })
       expect(badReqRes.status).toBe(400)
 
       const docAfterBadReq = await Dish.findOne({ dishId: '101' }).lean()
@@ -504,7 +572,7 @@ describe('Dishes API (/dishes)', () => {
       // 2. Conflict PATCH request (stale expectedVersion)
       const conflictRes = await request(app)
         .patch('/dishes/101')
-        .send({ dishName: 'Stale Attempt Name', expectedVersion: 999 })
+        .send({ dishName: 'Stale Attempt Name', isPublished: true, expectedVersion: 999 })
       expect(conflictRes.status).toBe(409)
 
       const docAfterConflict = await Dish.findOne({ dishId: '101' }).lean()
@@ -513,4 +581,41 @@ describe('Dishes API (/dishes)', () => {
       expect(docAfterConflict?.isPublished).toBe(initialDoc?.isPublished)
     })
   })
+
+  describe('Global Error Handling & Malformed JSON Middleware', () => {
+    it('returns HTTP 400 JSON rather than HTML when request body contains malformed JSON', async () => {
+      const response = await request(app)
+        .patch('/dishes/101')
+        .set('Content-Type', 'application/json')
+        .send('{"dishName": "Broken JSON,')
+
+      expect(response.status).toBe(400)
+      expect(response.headers['content-type']).toMatch(/application\/json/)
+      expect(response.body).toEqual({
+        error: 'Bad Request',
+        message: 'Invalid JSON body',
+      })
+    })
+
+    it('returns safe HTTP 500 JSON without exposing internal exception details on unexpected errors', async () => {
+      const testApp = express()
+      testApp.use(express.json())
+      testApp.get('/test-unexpected-error', (_req, _res, next) => {
+        next(new Error('Internal database password leak or stack trace'))
+      })
+      testApp.use(errorHandler)
+
+      const response = await request(testApp).get('/test-unexpected-error')
+
+      expect(response.status).toBe(500)
+      expect(response.headers['content-type']).toMatch(/application\/json/)
+      expect(response.body).toEqual({
+        error: 'Internal Server Error',
+        message: 'Unexpected error',
+      })
+      expect(JSON.stringify(response.body)).not.toContain('password')
+      expect(JSON.stringify(response.body)).not.toContain('stack trace')
+    })
+  })
 })
+

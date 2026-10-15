@@ -54,40 +54,19 @@ export const updateDishSchema = z
       .min(1, 'expectedVersion must be at least 1'),
     dishName: z
       .string({
+        required_error: 'dishName is required',
         invalid_type_error: 'dishName must be a string',
       })
       .trim()
-      .min(1, 'dishName cannot be empty or whitespace-only')
-      .optional(),
-    imageUrl: z
-      .string({
-        invalid_type_error: 'imageUrl must be a string',
-      })
-      .trim()
-      .url('imageUrl must be a valid URL')
-      .refine(
-        (url) => /^https?:\/\//i.test(url),
-        'imageUrl must use http or https protocol'
-      )
-      .optional(),
-    isPublished: z
-      .boolean({
-        invalid_type_error: 'isPublished must be a boolean',
-      })
-      .optional(),
+      .min(1, 'dishName cannot be empty or whitespace-only'),
+    isPublished: z.boolean({
+      required_error: 'isPublished is required',
+      invalid_type_error: 'isPublished must be a boolean',
+    }),
   })
   .strict({
     message: 'Unexpected field in request body',
   })
-  .refine(
-    (data) =>
-      data.dishName !== undefined ||
-      data.imageUrl !== undefined ||
-      data.isPublished !== undefined,
-    {
-      message:
-        'At least one field to update (dishName, imageUrl, or isPublished) must be provided',
-    }
-  )
 
 export type UpdateDishInput = z.infer<typeof updateDishSchema>
+

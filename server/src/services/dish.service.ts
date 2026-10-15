@@ -87,10 +87,10 @@ export const updateDishSafely = async (
 
   // 3. Publishing integrity validation
   // When publishing a dish (isPublished: true), require non-empty trimmed name and valid complete HTTP/HTTPS imageUrl,
-  // validating the complete effective image URL including when derived from existing database record.
+  // validating the effective stored database imageUrl.
   if (input.isPublished === true) {
     const effectiveName = (input.dishName ?? currentDish.dishName)?.trim()
-    const effectiveImageUrl = input.imageUrl ?? currentDish.imageUrl
+    const effectiveImageUrl = currentDish.imageUrl
 
     if (!effectiveName || effectiveName.length === 0) {
       return {
@@ -107,16 +107,10 @@ export const updateDishSafely = async (
     }
   }
 
-  // 4. Construct update fields without silently toggling any omitted fields
-  const updateFields: Record<string, unknown> = {}
-  if (input.dishName !== undefined) {
-    updateFields.dishName = input.dishName.trim()
-  }
-  if (input.imageUrl !== undefined) {
-    updateFields.imageUrl = input.imageUrl.trim()
-  }
-  if (input.isPublished !== undefined) {
-    updateFields.isPublished = input.isPublished
+  // 4. Construct update fields with explicit dishName and isPublished
+  const updateFields = {
+    dishName: input.dishName.trim(),
+    isPublished: input.isPublished,
   }
 
   // 5. Execute atomic conditional update with version check and single increment
